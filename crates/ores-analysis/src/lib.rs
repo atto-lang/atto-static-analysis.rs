@@ -6,18 +6,19 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Program {
     pub schema_version: u32,
     pub functions: Vec<Function>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Function {
     pub name: String,
-    #[serde(default)]
     pub operations: Vec<Operation>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Allocate {
         bytes: Option<u64>,
@@ -35,7 +36,6 @@ pub enum Operation {
     IndirectCall,
     Loop {
         iterations: Option<u64>,
-        #[serde(default)]
         operations: Vec<Operation>,
     },
     /// A writable reference may not escape the owning actor's domain.
@@ -356,6 +356,16 @@ mod tests {
                 operations,
             }],
         }
+    }
+    #[test]
+    fn rejects_omitted_effect_list() {
+        let input = r#"{"schema_version":1,"functions":[{"name":"main"}]}"#;
+        assert!(serde_json::from_str::<Program>(input).is_err());
+    }
+    #[test]
+    fn rejects_unrecognized_effect_data() {
+        let input = r#"{"schema_version":1,"functions":[{"name":"main","operations":[{"kind":"copy","bytes":0,"unknown":true}]}]}"#;
+        assert!(serde_json::from_str::<Program>(input).is_err());
     }
     #[test]
     fn hard_realtime_works_for_bounded_zero_alloc_loops() {
