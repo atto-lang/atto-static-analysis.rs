@@ -116,8 +116,8 @@ impl Report {
 }
 struct Engine<'a> {
     functions: HashMap<&'a str, &'a Function>,
-    active: HashSet<&'a str>,
-    cache: HashMap<&'a str, Summary>,
+    active: HashSet<String>,
+    cache: HashMap<String, Summary>,
     diagnostics: Vec<Diagnostic>,
 }
 impl Engine<'_> {
@@ -130,7 +130,7 @@ impl Engine<'_> {
         if let Some(found) = self.cache.get(name) { return found.clone(); }
         // Cycles require separately verified recursion bounds and stack limits;
         // intentionally reject instead of assuming a finite upper bound.
-        if !self.active.insert(name) {
+        if !self.active.insert(name.to_owned()) {
             self.emit("ORES-SA102", Severity::Error, name, "recursive call cycle: bounds not proven");
             return Summary { unresolved_control_flow: true, ..Summary::default() };
         }
@@ -142,7 +142,7 @@ impl Engine<'_> {
             }
         };
         self.active.remove(name);
-        self.cache.insert(name.to_owned().leak(), result.clone());
+        self.cache.insert(name.to_owned(), result.clone());
         result
     }
     fn operations(&mut self, owner: &str, operations: &[Operation]) -> Summary {
