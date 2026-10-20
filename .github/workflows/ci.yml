@@ -15,6 +15,10 @@ jobs:
       - run: cargo test --locked --workspace --all-targets
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo run --locked -p ores-analyze -- examples/hard-realtime.json hard
+      - name: Verify cross-repo scalar v1 fixture (model-only)
+        run: |
+          cargo run --locked -p ores-analyze -- examples/rust-scalar-expected.json hard > target/rust-scalar-report.json
+          python3 -c 'import json; r=json.load(open("target/rust-scalar-report.json")); assert r["assurance_level"] == "untrusted_effect_ir_model_only"; assert r["functions"]["answer"]["allocations_upper_bound"] == 0; assert r["functions"]["answer"]["copies_upper_bound"] == 0'
       - name: Reject unsafe program
         run: |
           if cargo run --locked -p ores-analyze -- examples/unsafe.json hard; then
