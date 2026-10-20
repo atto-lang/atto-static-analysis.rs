@@ -84,9 +84,7 @@ fn main() -> ExitCode {
 
     let (safety, path, profile_name) = match args.as_slice() {
         [_, path, profile] => (false, path.as_str(), profile.as_str()),
-        [_, flag, path, profile] if flag == "--safety" => {
-            (true, path.as_str(), profile.as_str())
-        }
+        [_, flag, path, profile] if flag == "--safety" => (true, path.as_str(), profile.as_str()),
         _ => {
             eprintln!(
                 "usage: ores-analyze [--safety] <input.json|-> <general|soft|hard> | --layout <input.json|->"

@@ -225,7 +225,9 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
             &mut report.errors,
             None,
             "ORES-LAYOUT005",
-            format!("field/access evidence exceeds analysis budget of {MAX_TOTAL_FIELD_ITEMS} items"),
+            format!(
+                "field/access evidence exceeds analysis budget of {MAX_TOTAL_FIELD_ITEMS} items"
+            ),
         );
         return report;
     }
@@ -259,7 +261,9 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
                 &mut report.errors,
                 Some(&region.name),
                 "ORES-LAYOUT007",
-                format!("region field/access list exceeds per-region budget of {MAX_FIELDS_PER_REGION}"),
+                format!(
+                    "region field/access list exceeds per-region budget of {MAX_FIELDS_PER_REGION}"
+                ),
             );
             continue;
         }
@@ -281,7 +285,7 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
             );
             continue;
         }
-        if region.field_bytes.is_empty() || region.field_bytes.iter().any(|bytes| *bytes == 0) {
+        if region.field_bytes.is_empty() || region.field_bytes.contains(&0) {
             push_error(
                 &mut report.errors,
                 Some(&region.name),
@@ -504,8 +508,11 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
         (a.region.as_str(), a.code, a.kind).cmp(&(b.region.as_str(), b.code, b.kind))
     });
     report.errors.sort_by(|a, b| {
-        (a.region.as_deref(), a.code, a.message.as_str())
-            .cmp(&(b.region.as_deref(), b.code, b.message.as_str()))
+        (a.region.as_deref(), a.code, a.message.as_str()).cmp(&(
+            b.region.as_deref(),
+            b.code,
+            b.message.as_str(),
+        ))
     });
     report
 }
