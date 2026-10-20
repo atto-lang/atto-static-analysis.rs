@@ -244,6 +244,38 @@ mod tests {
     }
 
     #[test]
+    fn schema_optional_locations_are_validated_but_not_considered_proofs() {
+        let text = GOOD
+            .replace(
+                "\"safepoint\":false",
+                "\"safepoint\":false,\"location\":{\"path\":\"src/a.ores\",\"line\":3}",
+            )
+            .replace(
+                "\"guard\":\"unproved\"",
+                "\"guard\":\"unproved\",\"location\":{\"path\":\"src/a.ores\",\"line\":5}",
+            );
+        let facts: SharedFactsV0 = serde_json::from_str(&text).unwrap();
+        assert!(facts.advisory_effect_ir().is_ok());
+
+        let bad = text.replace("\"line\":3", "\"line\":0");
+        let facts: SharedFactsV0 = serde_json::from_str(&bad).unwrap();
+        assert!(facts.advisory_effect_ir().is_err());
+        let bad = text.replace("src/a.ores", "");
+        let facts: SharedFactsV0 = serde_json::from_str(&bad).unwrap();
+        assert!(facts.advisory_effect_ir().is_err());
+    }
+
+    #[test]
+    fn enclosing_loop_calls_fail_closed_even_with_valid_schema_fields() {
+        let text = GOOD.replace(
+            "\"guard\":\"unproved\"",
+            "\"guard\":\"unproved\",\"enclosing_loop\":\"L1\"",
+        );
+        let facts: SharedFactsV0 = serde_json::from_str(&text).unwrap();
+        assert!(facts.advisory_effect_ir().is_err());
+    }
+
+    #[test]
     fn source_hash_field_is_not_assumed_to_be_attestation() {
         let text = GOOD.replace("sha256:", "sha384:");
         let facts: SharedFactsV0 = serde_json::from_str(&text).unwrap();
