@@ -3,6 +3,7 @@ use ores_analysis::{
     cfg::{analyze_cfg, CfgProgram},
     layout::{analyze_layout, LayoutProgram},
     safety::{analyze_safety, SafetyProfile, SafetyProgram},
+    shared_facts::SharedFactsV0,
     Profile, Program,
 };
 use std::{
@@ -77,6 +78,56 @@ fn read_layout_input(path: &str) -> io::Result<String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    // Restricted Java/Graal typed-AST scalar facts: advisory reporting only.
+    // Do not treat a self-declared SHA-256 in JSON as trusted compiler proof.
+    if let [_, flag, path, mode] = args.as_slice() {
+        if flag == "--static-facts" {
+            if mode != "general" {
+                eprintln!("shared static-facts v0 lacks verified producer/effect provenance; strict profiles are unsupported");
+                return ExitCode::from(2);
+            }
+            let data = match read_cfg_input(path) {
+                Ok(data) => data,
+                Err(err) => {
+                    eprintln!("cannot read shared static facts: {err}");
+                    return ExitCode::from(2);
+                }
+            };
+            let facts: SharedFactsV0 = match serde_json::from_str(&data) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("invalid ores-static-facts/v0 JSON: {err}");
+                    return ExitCode::from(2);
+                }
+            };
+            let program = match facts.advisory_effect_ir() {
+                Ok(program) => program,
+                Err(err) => {
+                    eprintln!("static-facts scalar admission rejected: {err}");
+                    return ExitCode::from(2);
+                }
+            };
+            let report = analyze(&program, Profile::General);
+            let failed = report.has_errors();
+            let response = serde_json::json!({
+                "input_version": "ores-static-facts/v0",
+                "unit": facts.unit,
+                "advisory_only": true,
+                "producer_authenticated": false,
+                "work_allocation_copy_bounds": "unverified",
+                "report": report
+            });
+            match serde_json::to_string_pretty(&response) {
+                Ok(json) => println!("{json}"),
+                Err(err) => {
+                    eprintln!("cannot serialize shared fact analysis report: {err}");
+                    return ExitCode::from(2);
+                }
+            }
+            return if failed { ExitCode::from(1) } else { ExitCode::SUCCESS };
+        }
+    }
 
     if let [_, flag, path] = args.as_slice() {
         if flag == "--layout" {
@@ -156,7 +207,7 @@ fn main() -> ExitCode {
         [_, flag, path, profile] if flag == "--safety" => (true, path.as_str(), profile.as_str()),
         _ => {
             eprintln!(
-                "usage: ores-analyze [--safety|--cfg] <input.json|-> <general|soft|hard> | --layout <input.json|->"
+                "usage: ores-analyze [--safety|--cfg] <input.json|-> <general|soft|hard> | --static-facts <input.json|-> general | --layout <input.json|->"
             );
             return ExitCode::from(2);
         }
