@@ -441,9 +441,11 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
     let total_blocks = program.functions.iter().fold(0_usize, |sum, function| {
         sum.saturating_add(function.blocks.len())
     });
-    let total_ops = program.functions.iter().flat_map(|f| &f.blocks).fold(
-        0_usize, |sum, block| sum.saturating_add(block.ops.len())
-    );
+    let total_ops = program
+        .functions
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .fold(0_usize, |sum, block| sum.saturating_add(block.ops.len()));
     if total_blocks > 4096 || total_ops > 100_000 {
         error(
             &mut diagnostics,
@@ -760,13 +762,15 @@ mod tests {
     }
     #[test]
     fn rejects_unverified_shared_capability_even_with_asserted_domain() {
-        let input = SAFE.replace(
-            r#""domain":"actor_private""#,
-            r#""domain":"shared_immutable""#,
-        ).replace(
-            r#""kind":"read","place":"x""#,
-            r#""kind":"actor_send","place":"x","transfer":"shared_capability""#,
-        );
+        let input = SAFE
+            .replace(
+                r#""domain":"actor_private""#,
+                r#""domain":"shared_immutable""#,
+            )
+            .replace(
+                r#""kind":"read","place":"x""#,
+                r#""kind":"actor_send","place":"x","transfer":"shared_capability""#,
+            );
         let report = run(&input);
         assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW108"));
         assert!(!report.admitted_to_static_gate);
@@ -778,7 +782,10 @@ mod tests {
             r#""kind":"read","place":"x""#,
             r#""kind":"actor_send","place":"x","transfer":"serialized_move""#,
         );
-        assert!(run(&input).diagnostics.iter().any(|d| d.code == "ORES-FLOW108"));
+        assert!(run(&input)
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-FLOW108"));
     }
 
     #[test]
@@ -797,9 +804,10 @@ mod tests {
         );
         let p: FlowProgram = serde_json::from_str(&input).unwrap();
         assert!(analyze_flow(&p, FlowProfile::Soft)
-            .diagnostics.iter().any(|d| d.code == "ORES-FLOW300"));
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-FLOW300"));
     }
-
 
     #[test]
     fn rejects_global_cfg_operations_budget() {
@@ -809,10 +817,13 @@ mod tests {
         for n in 0..12 {
             let mut f: FlowFunction = serde_json::from_str(
                 r#"{"name":"f","entry":"entry","max_uninterrupted_units":10000,
-                    "blocks":[{"id":"entry","ops":[],"terminator":{"kind":"return"}}]}"#
-            ).unwrap();
+                    "blocks":[{"id":"entry","ops":[],"terminator":{"kind":"return"}}]}"#,
+            )
+            .unwrap();
             f.name = format!("f{n}");
-            f.blocks[0].ops = (0..9000).map(|_| FlowOp::Compute { units: Some(0) }).collect();
+            f.blocks[0].ops = (0..9000)
+                .map(|_| FlowOp::Compute { units: Some(0) })
+                .collect();
             functions.push(f);
         }
         p.functions = functions;
