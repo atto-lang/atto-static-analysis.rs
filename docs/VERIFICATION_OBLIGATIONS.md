@@ -42,3 +42,14 @@ certificate. Applies to Java/GraalVM, C++/LLVM and the independent Rust compiler
 - Reproducible CI with exact source Git trees and nonempty job logs.
 
 Do not describe a passing `hard` profile as certification of physical hard RT.
+
+## Current audited scalar producer contract
+
+The restricted `oreslang-source.rs` prototype now exports this schema from its
+validated MIR via `oresc --emit-effect-ir`: every parsed zero-argument static
+function is enumerated, and literal/integer-arithmetic bodies have no modeled
+guest alloc/copy/IO/FFI/await/actor effects. `examples/rust-scalar-expected.json`
+is a cross-repo *fixture*, not an authenticated source or machine proof. The
+analyzer always reports `assurance_level=untrusted_effect_ir_model_only`, even
+when the hard profile returns exit zero. An independently verified bound and
+signed/provenanced producer attestation remain prerequisites for certification.
