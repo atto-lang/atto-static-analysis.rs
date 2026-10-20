@@ -37,3 +37,11 @@ jobs:
         run: |
           cargo run --locked -p ores-analyze -- --layout examples/layout.json > target/layout-report.json
           python3 -c 'import json; d=json.load(open("target/layout-report.json")); c={x["code"] for x in d["findings"]}; assert {"ORES-LAYOUT101","ORES-LAYOUT111","ORES-LAYOUT121","ORES-LAYOUT201"} <= c; assert not d["errors"]'
+      - name: CFG-v2 bounded ownership admission
+        run: |
+          cargo run --locked -p ores-analyze -- --cfg examples/cfg-valid.json hard > target/cfg-ok.json
+          python3 -c 'import json; d=json.load(open("target/cfg-ok.json")); assert d["admitted_to_static_gate"] and d["hard_realtime_certified"] is False'
+          if cargo run --locked -p ores-analyze -- --cfg examples/cfg-invalid.json hard > target/cfg-fail.json; then
+            echo "Expected CFG-v2 branch move to fail"; exit 1
+          fi
+          grep -q 'ORES-CFG111' target/cfg-fail.json

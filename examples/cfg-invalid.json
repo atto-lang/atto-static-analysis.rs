@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "tick",
+      "entry": "entry",
+      "max_uninterrupted_units": 10,
+      "allow_error_propagation": false,
+      "blocks": [
+        {
+          "id": "entry",
+          "events": [
+            {
+              "kind": "define",
+              "place": "flag"
+            },
+            {
+              "kind": "define",
+              "place": "value"
+            }
+          ],
+          "terminator": {
+            "kind": "branch",
+            "condition": "flag",
+            "then_block": "left",
+            "else_block": "right"
+          }
+        },
+        {
+          "id": "left",
+          "events": [
+            {
+              "kind": "move",
+              "place": "value"
+            }
+          ],
+          "terminator": {
+            "kind": "jump",
+            "target": "join"
+          }
+        },
+        {
+          "id": "right",
+          "events": [],
+          "terminator": {
+            "kind": "jump",
+            "target": "join"
+          }
+        },
+        {
+          "id": "join",
+          "events": [
+            {
+              "kind": "read",
+              "place": "value"
+            }
+          ],
+          "terminator": {
+            "kind": "return"
+          }
+        }
+      ]
+    }
+  ]
+}
