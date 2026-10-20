@@ -86,3 +86,24 @@ name).
    under optional stdlib/analysis, while `core` stays freestanding/no-alloc.
 
 No stage should change safety policy because an optimization heuristic fired.
+
+## Source-level bridge now implemented (Java/Oreslang AST, draft PR #1621)
+
+`OresCompiler.inspectLayoutAccesses(String source)` runs the real Java
+Oreslang parser, type checker and ownership checker, then gathers bounded
+member-syntax observations from supported `for-of` loops. It returns the
+containing callable, iterable/binding names, distinct selected members, and
+explicit unsupported/whole-row flags. This is **source-derived**, unlike
+synthetic IR fixtures, but still incomplete for physical optimization.
+
+The observation API explicitly returns
+`completeForLayoutRecommendations=false` on every result. It must **not**
+be serialized into a Rust `LayoutProgram` with `evidence_complete=true`.
+A member expression may be a property rather than a physical field, and the
+compiler has not proven a physical store, field offset/size, actor-domain
+relocation, borrow lifetime, row count, hotness, or source span.
+
+Next integration should join (a) the source observation,
+(b) type-resolved physical field/store identity from Oreslang HIR, and
+(c) independent target/profile evidence. Only then can a producer provide
+complete, validated v1 regions to this Rust advisory engine.
