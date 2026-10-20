@@ -424,10 +424,11 @@ mod tests {
         ).unwrap();
         assert_eq!(p.functions.len(), 1);
         assert_eq!(p.functions[0].name, "answer");
-        assert!(p.functions[0].operations.is_empty());
+        assert_eq!(p.functions[0].operations.len(), 3);
         let report = analyze(&p, Profile::HardRealtime);
         assert!(!report.has_errors());
         assert_eq!(report.assurance_level, ASSURANCE_LEVEL);
+        assert_eq!(report.functions["answer"].operations_upper_bound, Some(3));
     }
     #[test]
     fn rejects_omitted_effect_list() {
