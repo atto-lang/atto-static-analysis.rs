@@ -18,7 +18,7 @@ jobs:
       - name: Verify cross-repo scalar v1 fixture (model-only)
         run: |
           cargo run --locked -p ores-analyze -- examples/rust-scalar-expected.json hard > target/rust-scalar-report.json
-          python3 -c 'import json; r=json.load(open("target/rust-scalar-report.json")); assert r["assurance_level"] == "untrusted_effect_ir_model_only"; assert r["functions"]["answer"]["allocations_upper_bound"] == 0; assert r["functions"]["answer"]["copies_upper_bound"] == 0'
+          python3 -c 'import json,hashlib; from pathlib import Path; ir=Path("examples/rust-scalar-expected.json").read_text().strip(); assert hashlib.sha256(ir.encode()).hexdigest()=="8ee1adbf6faef704c1eb6d2b2075c3b2d723097037f646f9e6e518a69d005463"; r=json.loads(Path("target/rust-scalar-report.json").read_text()); assert r["assurance_level"]=="untrusted_effect_ir_model_only"; assert r["functions"]["answer"]["allocations_upper_bound"]==0; assert r["functions"]["answer"]["copies_upper_bound"]==0; assert r["functions"]["answer"]["operations_upper_bound"]==3'
       - name: Reject unsafe program
         run: |
           if cargo run --locked -p ores-analyze -- examples/unsafe.json hard; then
