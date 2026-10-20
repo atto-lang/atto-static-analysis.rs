@@ -1,6 +1,7 @@
 //! Prototype, versioned MIR-effect static analyzer for all Oreslang frontends.
 //! Conservative on absent bounds and unresolvable callees. No proof of WCET.
 pub mod safety;
+pub mod cfg;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
