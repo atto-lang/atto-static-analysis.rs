@@ -35,6 +35,18 @@ The compiler exporter intentionally refuses function calls, actors and async. Th
 - Across the entire CFG payload (not per-function only), the prototype limits blocks to 4,096 and events to 100,000. The CLI reads no more than 4 MiB of input plus one byte, then fails closed for oversized files or standard input.
 - JSON from untrusted producers remains non-authoritative: `effects_complete: true` is a compiler attestation, not proof that omitted instructions, FFI, suspension or effects do not exist.
 
+## Interprocedural scalar call summaries (stacked milestone)
+
+`call` events can be statically admitted only when their target and every
+transitive callee can be independently summarized as a **single-block,
+pure scalar** function with finite compute units, local declarations/reads,
+and direct scalar calls. The analyzer memoizes each bound, adds one abstract
+unit per call dispatch, and rejects recursion (including mutual recursion),
+unresolved/ambiguous targets, overflow, state mutation, ownership transfers,
+allocation, FFI, suspension, cooperative resets, and nontrivial callee CFGs.
+No general-purpose call safety or WCET certificate is claimed. The caller's
+own budget includes the full transitive verified scalar work.
+
 ## Exact-count structured loops (stacked prototype)
 
 The optional `{"kind":"repeat","iterations":N,"operations":[...]}` operation
