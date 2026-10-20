@@ -298,6 +298,13 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
             if let Operation::Loop { operations, .. } = op {
                 pending.extend(operations.iter().map(|child| (child, depth + 1)));
             }
+            if let Operation::Compute { units: 0 } = op {
+                engine.emit("ORES-SA005", Severity::Error, "<module>",
+                    "compute units must be positive, never a zero-cost placeholder");
+                return Report { schema_version: SCHEMA_VERSION,
+                    assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics,
+                    functions: BTreeMap::new() };
+            }
             if let Operation::Call { target } = op {
                 if target.len() > 256 {
                     engine.emit("ORES-SA003", Severity::Error, "<module>", "call target exceeds budget");
@@ -435,6 +442,12 @@ mod tests {
         assert_eq!(summary.allocations_upper_bound, Some(0));
         assert_eq!(summary.copies_upper_bound, Some(0));
         assert_eq!(report.assurance_level, ASSURANCE_LEVEL);
+    }
+    #[test]
+    fn zero_cost_compute_cannot_hide_real_work() {
+        let report = analyze(&sample(vec![Operation::Compute { units: 0 }]), Profile::General);
+        assert!(report.has_errors());
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SA005"));
     }
     #[test]
     fn compute_without_units_is_invalid_ir() {
