@@ -18,19 +18,27 @@ const MAX_CFG_INPUT_BYTES: u64 = 1_048_576;
 fn read_cfg_input(path: &str) -> io::Result<String> {
     if path == "-" {
         let mut data = String::new();
-        io::stdin().lock().take(MAX_CFG_INPUT_BYTES + 1).read_to_string(&mut data)?;
+        io::stdin()
+            .lock()
+            .take(MAX_CFG_INPUT_BYTES + 1)
+            .read_to_string(&mut data)?;
         if data.len() as u64 > MAX_CFG_INPUT_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "CFG IR exceeds 1 MiB limit"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "CFG IR exceeds 1 MiB limit",
+            ));
         }
         Ok(data)
     } else {
         if fs::metadata(path)?.len() > MAX_CFG_INPUT_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "CFG IR exceeds 1 MiB limit"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "CFG IR exceeds 1 MiB limit",
+            ));
         }
         fs::read_to_string(path)
     }
 }
-
 
 fn read_input(path: &str) -> io::Result<String> {
     if path == "-" {
