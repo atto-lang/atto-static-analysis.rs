@@ -1,9 +1,23 @@
-use ores_analysis::{analyze, Profile, Program};
+use ores_analysis::{analyze, Profile, Program, MAX_IR_BYTES};
 use std::{
     env, fs,
     io::{self, Read},
     process::ExitCode,
 };
+fn read_ir(path: &str) -> io::Result<String> {
+    let reader: Box<dyn Read> = if path == "-" {
+        Box::new(io::stdin())
+    } else {
+        Box::new(fs::File::open(path)?)
+    };
+    let mut bounded = reader.take(MAX_IR_BYTES as u64 + 1);
+    let mut input = String::new();
+    bounded.read_to_string(&mut input)?;
+    if input.len() > MAX_IR_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "effect IR exceeds 8 MiB limit"));
+    }
+    Ok(input)
+}
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
@@ -19,15 +33,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let input = if args[1] == "-" {
-        let mut buffer = String::new();
-        match io::stdin().read_to_string(&mut buffer) {
-            Ok(_) => Ok(buffer),
-            Err(err) => Err(err),
-        }
-    } else {
-        fs::read_to_string(&args[1])
-    };
+    let input = read_ir(&args[1]);
     let program: Program = match input {
         Ok(data) => match serde_json::from_str(&data) {
             Ok(program) => program,
