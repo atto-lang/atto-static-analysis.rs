@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "f",
+      "entry": "entry",
+      "max_uninterrupted_units": 6,
+      "blocks": [
+        {
+          "id": "entry",
+          "ops": [
+            {
+              "kind": "declare",
+              "place": "x",
+              "domain": "local"
+            },
+            {
+              "kind": "read",
+              "place": "x"
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "declare",
+              "place": "local",
+              "domain": "local"
+            },
+            {
+              "kind": "read",
+              "place": "local"
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            }
+          ],
+          "terminator": {
+            "kind": "return"
+          }
+        }
+      ]
+    }
+  ]
+}
