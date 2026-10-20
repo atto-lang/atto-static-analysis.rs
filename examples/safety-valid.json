@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "tick",
+      "control_flow": "linear",
+      "max_uninterrupted_units": 16,
+      "allow_error_propagation": false,
+      "events": [
+        {"kind":"define","place":"frame"},
+        {"kind":"borrow","place":"frame","loan":"r","mutable":false},
+        {"kind":"end_borrow","loan":"r"},
+        {"kind":"lock","id":"A"},
+        {"kind":"lock","id":"B"},
+        {"kind":"unlock","id":"B"},
+        {"kind":"unlock","id":"A"},
+        {"kind":"compute","units":8},
+        {"kind":"cooperate"},
+        {"kind":"compute","units":8},
+        {"kind":"may_fail","error":"decode"},
+        {"kind":"catch","error":"decode"}
+      ]
+    }
+  ]
+}
