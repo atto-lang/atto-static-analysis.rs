@@ -12,34 +12,32 @@ use std::{
 
 const MAX_LAYOUT_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
-fn read_input(path: &str) -> io::Result<String> {
-    if path == "-" {
-        let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer)?;
-        Ok(buffer)
-    } else {
-        fs::read_to_string(path)
-    }
-}
+const MAX_ANALYSIS_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 
-fn read_layout_input(path: &str) -> io::Result<String> {
-    // Limit actual bytes read, not merely an initial stat() result. Files
-    // may grow after metadata checks or be special files/FIFOs.
+fn read_bounded(path: &str, limit: u64) -> io::Result<String> {
+    // Bound *actual* reads, not just metadata (files may grow or be FIFOs).
+    // A single extra byte distinguishes an oversized stream from a valid one.
     let mut buffer = String::new();
     if path == "-" {
-        let stdin = io::stdin();
-        stdin.lock().take(MAX_LAYOUT_INPUT_BYTES + 1).read_to_string(&mut buffer)?;
+        io::stdin().lock().take(limit + 1).read_to_string(&mut buffer)?;
     } else {
-        fs::File::open(path)?.take(MAX_LAYOUT_INPUT_BYTES + 1)
-            .read_to_string(&mut buffer)?;
+        fs::File::open(path)?.take(limit + 1).read_to_string(&mut buffer)?;
     }
-    if buffer.len() as u64 > MAX_LAYOUT_INPUT_BYTES {
+    if buffer.len() as u64 > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "layout IR exceeds 16 MiB input limit",
+            format!("analysis input exceeds {limit} bytes"),
         ));
     }
     Ok(buffer)
+}
+
+fn read_input(path: &str) -> io::Result<String> {
+    read_bounded(path, MAX_ANALYSIS_INPUT_BYTES)
+}
+
+fn read_layout_input(path: &str) -> io::Result<String> {
+    read_bounded(path, MAX_LAYOUT_INPUT_BYTES)
 }
 
 fn main() -> ExitCode {
