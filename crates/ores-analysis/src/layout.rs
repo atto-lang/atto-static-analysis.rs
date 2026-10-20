@@ -278,11 +278,15 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
 
     let mut names = HashSet::new();
     for region in &program.regions {
-        if region.source_file.as_ref().is_some_and(|v| v.len() > 1024)
-            || region.source_line == Some(0)
+        if region.source_file.as_ref().is_some_and(|v| {
+            v.is_empty() || v.len() > 1024 || v.chars().any(char::is_control)
+        }) || region.source_line == Some(0)
+            || region.source_file.is_some() != region.source_line.is_some()
         {
-            push_error(&mut report.errors, Some(&region.name),
-                "ORES-LAYOUT018", "source origin must have bounded file bytes and positive line");
+            push_error(
+                &mut report.errors, Some(&region.name), "ORES-LAYOUT018",
+                "source location requires a nonempty bounded control-free path and matching positive line",
+            );
             continue;
         }
         if region.name.len() > MAX_REGION_NAME_BYTES {
@@ -901,6 +905,26 @@ mod tests {
         assert_eq!(finding.source_file.as_deref(), Some("stdlib/runtime/scheduler.ores"));
         assert_eq!(finding.source_line, Some(27));
     }
+    #[test]
+    fn incomplete_source_location_fails_closed() {
+        let mut region = base_region();
+        region.source_file = Some("runtime/actor.ores".into());
+        let report = analyze_layout(&program(region));
+        assert!(report.has_errors());
+        assert!(report.findings.is_empty());
+        assert_eq!(report.errors[0].code, "ORES-LAYOUT018");
+    }
+
+    #[test]
+    fn control_characters_in_source_path_fail_closed() {
+        let mut region = base_region();
+        region.source_file = Some("runtime/actor.ores\nforged".into());
+        region.source_line = Some(17);
+        let report = analyze_layout(&program(region));
+        assert_eq!(report.errors[0].code, "ORES-LAYOUT018");
+        assert!(report.findings.is_empty());
+    }
+
     #[test]
     fn zero_line_fails_closed_without_optimization_findings() {
         let mut r = base_region();
