@@ -18,10 +18,14 @@ fn summary<'a>(
         return saved.clone();
     }
     if depth >= MAX_CALL_DEPTH {
-        return Err(format!("call chain exceeds {MAX_CALL_DEPTH} frames: {name}"));
+        return Err(format!(
+            "call chain exceeds {MAX_CALL_DEPTH} frames: {name}"
+        ));
     }
     if !active.insert(name.to_owned()) {
-        return Err(format!("recursive call cycle involving '{name}' has no verified bound"));
+        return Err(format!(
+            "recursive call cycle involving '{name}' has no verified bound"
+        ));
     }
     let outcome = (|| {
         let func = index
@@ -41,10 +45,14 @@ fn summary<'a>(
         for op in &func.blocks[0].ops {
             match op {
                 FlowOp::Compute { units: Some(units) } => {
-                    work = work.checked_add(*units)
+                    work = work
+                        .checked_add(*units)
                         .ok_or_else(|| format!("abstract work overflow in '{name}'"))?;
                 }
-                FlowOp::Declare { place, domain: Domain::Local } => {
+                FlowOp::Declare {
+                    place,
+                    domain: Domain::Local,
+                } => {
                     if place.trim().is_empty() || !locals.insert(place.as_str()) {
                         return Err(format!("invalid local declaration in '{name}': {place}"));
                     }
@@ -56,7 +64,8 @@ fn summary<'a>(
                 }
                 FlowOp::Call { target } => {
                     let callee = summary(target, index, cache, active, depth + 1)?;
-                    work = work.checked_add(callee)
+                    work = work
+                        .checked_add(callee)
                         .and_then(|x| x.checked_add(1)) // call-site abstract dispatch
                         .ok_or_else(|| format!("abstract call work overflow in '{name}'"))?;
                 }
@@ -110,36 +119,44 @@ pub(crate) fn compute_pure_summaries(functions: &[FlowFunction]) -> PureSummarie
 mod tests {
     use super::*;
     fn program(json: &str) -> Vec<FlowFunction> {
-        serde_json::from_str::<crate::flow::FlowProgram>(json).unwrap().functions
+        serde_json::from_str::<crate::flow::FlowProgram>(json)
+            .unwrap()
+            .functions
     }
     #[test]
     fn admits_bounded_scalar_forward_call() {
-        let functions = program(r#"{"schema_version":1,"effects_complete":true,"functions":[
+        let functions = program(
+            r#"{"schema_version":1,"effects_complete":true,"functions":[
           {"name":"caller","entry":"b","max_uninterrupted_units":10,
            "blocks":[{"id":"b","ops":[{"kind":"call","target":"calc"}],"terminator":{"kind":"return"}}]},
           {"name":"calc","entry":"b","max_uninterrupted_units":10,
            "blocks":[{"id":"b","ops":[{"kind":"compute","units":3}],"terminator":{"kind":"return"}}]}
-        ]}"#);
+        ]}"#,
+        );
         assert_eq!(compute_pure_summaries(&functions)["calc"], Ok(3));
     }
     #[test]
     fn rejects_recursive_calls() {
-        let functions = program(r#"{"schema_version":1,"effects_complete":true,"functions":[
+        let functions = program(
+            r#"{"schema_version":1,"effects_complete":true,"functions":[
           {"name":"a","entry":"b","max_uninterrupted_units":10,
            "blocks":[{"id":"b","ops":[{"kind":"call","target":"b"}],"terminator":{"kind":"return"}}]},
           {"name":"b","entry":"b","max_uninterrupted_units":10,
            "blocks":[{"id":"b","ops":[{"kind":"call","target":"a"}],"terminator":{"kind":"return"}}]}
-        ]}"#);
+        ]}"#,
+        );
         assert!(compute_pure_summaries(&functions)["a"].is_err());
     }
     #[test]
     fn rejects_impure_transfer_even_if_labelled_immutable() {
-        let functions = program(r#"{"schema_version":1,"effects_complete":true,"functions":[
+        let functions = program(
+            r#"{"schema_version":1,"effects_complete":true,"functions":[
           {"name":"call","entry":"b","max_uninterrupted_units":10,
            "blocks":[{"id":"b","ops":[{"kind":"call","target":"unsafe"}],"terminator":{"kind":"return"}}]},
           {"name":"unsafe","entry":"b","max_uninterrupted_units":10,
            "blocks":[{"id":"b","ops":[{"kind":"declare","place":"x","domain":"shared_immutable"}],"terminator":{"kind":"return"}}]}
-        ]}"#);
+        ]}"#,
+        );
         assert!(compute_pure_summaries(&functions)["unsafe"].is_err());
     }
 }
