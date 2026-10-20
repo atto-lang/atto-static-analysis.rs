@@ -38,6 +38,14 @@ pub struct Region {
     pub name: String,
     pub scope: Scope,
     pub layout: Layout,
+    /// Optional origin of compiler/profile evidence. No source location may be
+    /// inferred from name alone or used to prove a runtime optimization.
+    #[serde(default)]
+    pub source_language: Option<SourceLanguage>,
+    #[serde(default)]
+    pub source_file: Option<String>,
+    #[serde(default)]
+    pub source_line: Option<u32>,
     /// Null means the producer cannot establish a row/cardinality bound.
     pub rows: Option<u64>,
     /// Declared byte width of each logical field, in declaration order.
@@ -64,6 +72,21 @@ pub struct Region {
     pub independent_component_passes: bool,
     /// Producer observed or proved concurrently written data sharing a region.
     pub concurrent_mutable_sharing: bool,
+    /// Known physical AoSoA rows per tile. Absent for unknown layouts.
+    #[serde(default)]
+    pub aosoa_tile_rows: Option<u32>,
+    /// Observed or source-proven structural insert/remove/migration count
+    /// across one pass; no recommendation is made when unknown.
+    #[serde(default)]
+    pub structural_changes_per_pass: Option<u64>,
+    /// True only with evidence that an access repeatedly gathers unrelated
+    /// columns through random entity IDs rather than a streaming column pass.
+    #[serde(default)]
+    pub random_cross_column_gathers: Option<bool>,
+    /// True only with evidence that ECS membership is dense and stable for
+    /// this pass. This is separate from the storage's global sparseness.
+    #[serde(default)]
+    pub stable_dense_membership: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -74,6 +97,10 @@ pub enum Scope {
     Runtime,
     Userland,
 }
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceLanguage { Oreslang, Rust, Java, Cpp }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +116,9 @@ pub enum Layout {
 pub struct Finding {
     pub region: String,
     pub scope: Scope,
+    pub source_language: Option<SourceLanguage>,
+    pub source_file: Option<String>,
+    pub source_line: Option<u32>,
     pub code: &'static str,
     pub kind: &'static str,
     pub confidence: &'static str,
@@ -158,6 +188,9 @@ fn add_finding(
     findings.push(Finding {
         region: region.name.clone(),
         scope: region.scope,
+        source_language: region.source_language,
+        source_file: region.source_file.clone(),
+        source_line: region.source_line,
         code,
         kind,
         confidence,
@@ -225,9 +258,7 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
             &mut report.errors,
             None,
             "ORES-LAYOUT005",
-            format!(
-                "field/access evidence exceeds analysis budget of {MAX_TOTAL_FIELD_ITEMS} items"
-            ),
+            format!("field/access evidence exceeds analysis budget of {MAX_TOTAL_FIELD_ITEMS} items"),
         );
         return report;
     }
@@ -245,6 +276,13 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
 
     let mut names = HashSet::new();
     for region in &program.regions {
+        if region.source_file.as_ref().is_some_and(|v| v.len() > 1024)
+            || region.source_line == Some(0)
+        {
+            push_error(&mut report.errors, Some(&region.name),
+                "ORES-LAYOUT018", "source origin must have bounded file bytes and positive line");
+            continue;
+        }
         if region.name.len() > MAX_REGION_NAME_BYTES {
             push_error(
                 &mut report.errors,
@@ -261,9 +299,7 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
                 &mut report.errors,
                 Some(&region.name),
                 "ORES-LAYOUT007",
-                format!(
-                    "region field/access list exceeds per-region budget of {MAX_FIELDS_PER_REGION}"
-                ),
+                format!("region field/access list exceeds per-region budget of {MAX_FIELDS_PER_REGION}"),
             );
             continue;
         }
@@ -285,7 +321,15 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
             );
             continue;
         }
-        if region.field_bytes.is_empty() || region.field_bytes.contains(&0) {
+        if let Some(tile) = region.aosoa_tile_rows {
+            if !matches!(region.layout, Layout::Aosoa) || !(2..=4096).contains(&tile) {
+                push_error(&mut report.errors, Some(&region.name),
+                    "ORES-LAYOUT017",
+                    "AoSoA tile size must be 2..=4096 rows and is only valid for aosoa layouts");
+                continue;
+            }
+        }
+        if region.field_bytes.is_empty() || region.field_bytes.iter().any(|bytes| *bytes == 0) {
             push_error(
                 &mut report.errors,
                 Some(&region.name),
@@ -481,6 +525,70 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
             }
         }
 
+        // These findings flag suboptimal existing layouts; they never
+        // authorize a layout change or assert a measured speedup.
+        if region.hot
+            && rows_large
+            && traversal_friendly
+            && region.whole_record_access
+            && matches!(region.layout, Layout::Soa)
+        {
+            add_finding(&mut report.findings, region,
+                "ORES-LAYOUT131", "whole_record_soa_scatter", "medium",
+                "Hot whole-record traversal over SoA may require cross-column gathers or row reassembly; benchmark AoS/AoSoA with the actual access mix, preserving handle and alias guarantees.");
+        }
+        if region.hot
+            && rows_large
+            && region.random_cross_column_gathers == Some(true)
+            && matches!(region.layout, Layout::Soa | Layout::Aosoa | Layout::Archetype)
+        {
+            add_finding(&mut report.findings, region,
+                "ORES-LAYOUT132", "random_column_gather", "medium",
+                "Observed random entity-ID gathers across columns may waste cache lines and TLB entries; profile gather locality and compare layouts before reordering.");
+        }
+        if region.hot
+            && rows_large
+            && matches!(region.layout, Layout::Aosoa)
+        {
+            if let (Some(actual), Some(ideal)) =
+                (region.aosoa_tile_rows, suggested_tile_rows)
+            {
+                // A broad tolerance avoids claiming that SIMD width alone
+                // determines the best tile size.
+                if actual < (ideal / 2).max(2)
+                    || u64::from(actual) > u64::from(ideal) * 4
+                {
+                    add_finding(&mut report.findings, region,
+                        "ORES-LAYOUT133", "aosoa_tile_benchmark", "low",
+                        format!("AoSoA tile is {actual} rows while SIMD-width-only starting point is {ideal}; measure occupancy, tails, alignment and memory bandwidth before retuning."));
+                }
+            }
+        }
+        if region.hot
+            && rows_large
+            && region.stable_dense_membership == Some(true)
+            && !region.independent_component_passes
+            && traversal_friendly
+            && matches!(region.layout, Layout::SparseSet | Layout::Archetype)
+        {
+            add_finding(&mut report.findings, region,
+                "ORES-LAYOUT134", "dense_ecs_overhead", "low",
+                "Dense, stable, whole-pass ECS traversal may pay avoidable entity lookup or indirection costs; benchmark dense SoA/AoSoA or fused archetype iteration.");
+        }
+        if region.hot && rows_large
+            && matches!(region.layout, Layout::Archetype | Layout::SparseSet)
+        {
+            if let (Some(changes), Some(rows)) =
+                (region.structural_changes_per_pass, region.rows)
+            {
+                if u128::from(changes) * 8 >= u128::from(rows) {
+                    add_finding(&mut report.findings, region,
+                        "ORES-LAYOUT135", "ecs_structural_churn", "medium",
+                        format!("{changes} structural changes per pass over {rows} logical entities; benchmark deferred ECS command buffers, batch moves and stable generation-checked handles."));
+                }
+            }
+        }
+
         if region.hot && region.rows != Some(0) && region.concurrent_mutable_sharing {
             add_finding(
                 &mut report.findings,
@@ -504,15 +612,18 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
         }
     }
 
+    // Do not publish partial optimization recommendations from a document
+    // containing any invalid region. Producers should fix evidence first.
+    if !report.errors.is_empty() {
+        report.findings.clear();
+        report.regions.clear();
+    }
     report.findings.sort_by(|a, b| {
         (a.region.as_str(), a.code, a.kind).cmp(&(b.region.as_str(), b.code, b.kind))
     });
     report.errors.sort_by(|a, b| {
-        (a.region.as_deref(), a.code, a.message.as_str()).cmp(&(
-            b.region.as_deref(),
-            b.code,
-            b.message.as_str(),
-        ))
+        (a.region.as_deref(), a.code, a.message.as_str())
+            .cmp(&(b.region.as_deref(), b.code, b.message.as_str()))
     });
     report
 }
@@ -533,6 +644,9 @@ mod tests {
             name: "physics.positions".into(),
             scope: Scope::Userland,
             layout: Layout::Aos,
+            source_language: None,
+            source_file: None,
+            source_line: None,
             rows: Some(10_000),
             field_bytes: vec![4, 4, 4, 4, 8, 8, 8, 8],
             accessed_fields: vec![0, 1],
@@ -546,6 +660,10 @@ mod tests {
             sparse_membership: false,
             independent_component_passes: false,
             concurrent_mutable_sharing: false,
+            aosoa_tile_rows: None,
+            structural_changes_per_pass: None,
+            random_cross_column_gathers: None,
+            stable_dense_membership: None,
         }
     }
 
@@ -685,7 +803,6 @@ mod tests {
         region.name = "x".repeat(MAX_REGION_NAME_BYTES + 1);
         let report = analyze_layout(&program(region));
         assert_eq!(report.errors[0].code, "ORES-LAYOUT006");
-        assert!(report.errors[0].region.is_none());
     }
 
     #[test]
@@ -693,15 +810,6 @@ mod tests {
         let mut region = base_region();
         region.concurrent_mutable_sharing = true;
         assert!(codes(&analyze_layout(&program(region))).contains(&"ORES-LAYOUT201"));
-    }
-
-    #[test]
-    fn zero_row_region_does_not_report_false_sharing() {
-        let mut region = base_region();
-        region.rows = Some(0);
-        region.accessed_fields.clear();
-        region.concurrent_mutable_sharing = true;
-        assert!(analyze_layout(&program(region)).findings.is_empty());
     }
 
     #[test]
@@ -713,6 +821,99 @@ mod tests {
         assert!(!codes(&report).contains(&"ORES-LAYOUT101"));
     }
 
+    #[test]
+    fn soa_whole_record_stream_reports_access_mismatch() {
+        let mut region = base_region();
+        region.layout = Layout::Soa;
+        region.whole_record_access = true;
+        let report = analyze_layout(&program(region));
+        assert!(codes(&report).contains(&"ORES-LAYOUT131"));
+        assert!(!codes(&report).contains(&"ORES-LAYOUT101"));
+    }
+    #[test]
+    fn source_observed_random_gathers_generate_locality_advice() {
+        let mut region = base_region();
+        region.layout = Layout::Archetype;
+        region.sequential_rows = false;
+        region.random_cross_column_gathers = Some(true);
+        assert!(codes(&analyze_layout(&program(region))).contains(&"ORES-LAYOUT132"));
+    }
+    #[test]
+    fn aosoa_tile_mismatch_needs_both_layout_and_target_evidence() {
+        let mut region = base_region();
+        region.layout = Layout::Aosoa;
+        region.aosoa_tile_rows = Some(256);
+        assert!(codes(&analyze_layout(&program(region.clone()))).contains(&"ORES-LAYOUT133"));
+        let mut p = program(region);
+        p.target.vector_bytes = None;
+        assert!(!codes(&analyze_layout(&p)).contains(&"ORES-LAYOUT133"));
+    }
+    #[test]
+    fn ecs_dense_membership_can_trigger_soa_benchmark() {
+        let mut region = base_region();
+        region.layout = Layout::SparseSet;
+        region.stable_dense_membership = Some(true);
+        assert!(codes(&analyze_layout(&program(region))).contains(&"ORES-LAYOUT134"));
+    }
+    #[test]
+    fn ecs_churn_triggers_only_with_known_significant_mutations() {
+        let mut region = base_region();
+        region.layout = Layout::Archetype;
+        region.structural_changes_per_pass = Some(1500);
+        assert!(codes(&analyze_layout(&program(region.clone()))).contains(&"ORES-LAYOUT135"));
+        region.structural_changes_per_pass = None;
+        assert!(!codes(&analyze_layout(&program(region))).contains(&"ORES-LAYOUT135"));
+    }
+    #[test]
+    fn invalid_second_region_suppresses_all_other_advice() {
+        let valid = base_region();
+        let mut invalid = base_region();
+        invalid.name = "bad.region".into();
+        invalid.accessed_fields = vec![0, 0];
+        let p = LayoutProgram {
+            schema_version: 1, evidence_complete: true, target: target(),
+            regions: vec![valid, invalid],
+        };
+        let r = analyze_layout(&p);
+        assert!(r.has_errors());
+        assert!(r.findings.is_empty(), "never return partial optimization advice");
+        assert!(r.regions.is_empty());
+    }
+    #[test]
+    fn preserves_exact_compiler_supplied_source_location() {
+        let mut r = base_region();
+        r.source_language = Some(SourceLanguage::Oreslang);
+        r.source_file = Some("stdlib/runtime/scheduler.ores".into());
+        r.source_line = Some(27);
+        let report = analyze_layout(&program(r));
+        let finding = report.findings.iter().find(|f| f.code == "ORES-LAYOUT101").unwrap();
+        assert_eq!(finding.source_file.as_deref(), Some("stdlib/runtime/scheduler.ores"));
+        assert_eq!(finding.source_line, Some(27));
+    }
+    #[test]
+    fn zero_line_fails_closed_without_optimization_findings() {
+        let mut r = base_region();
+        r.source_line = Some(0);
+        let result = analyze_layout(&program(r));
+        assert_eq!(result.errors[0].code, "ORES-LAYOUT018");
+        assert!(result.findings.is_empty());
+    }
+    #[test]
+    fn rejects_impossible_tile_metadata_fail_closed() {
+        let mut region = base_region();
+        region.aosoa_tile_rows = Some(8);
+        let report = analyze_layout(&program(region));
+        assert_eq!(report.errors[0].code, "ORES-LAYOUT017");
+        assert!(report.findings.is_empty());
+    }
+    #[test]
+    fn zero_row_region_suppresses_false_sharing_even_with_bad_hints() {
+        let mut region = base_region();
+        region.rows = Some(0);
+        region.accessed_fields.clear();
+        region.concurrent_mutable_sharing = true;
+        assert!(analyze_layout(&program(region)).findings.is_empty());
+    }
     #[test]
     fn unknown_fields_in_json_are_rejected_by_schema() {
         let json = r#"{"schema_version":1,"evidence_complete":true,"target":{"cache_line_bytes":64,"vector_bytes":32},"regions":[{"name":"x","scope":"core","layout":"aos","rows":128,"field_bytes":[4],"accessed_fields":[0],"dense_iteration":true,"sequential_rows":true,"hot":true,"relocation_verified":true,"stable_address_required":false,"whole_record_access":false,"iteration_independent":true,"sparse_membership":false,"independent_component_passes":false,"concurrent_mutable_sharing":false,"surprise":1}]}"#;

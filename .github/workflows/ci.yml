@@ -33,7 +33,11 @@ jobs:
           if cargo run --locked -p ores-analyze -- --safety examples/safety-invalid.json hard; then
             echo "Invalid MIR safety input unexpectedly passed"; exit 1
           fi
-      - name: Validate data-layout advisory analysis
+      - name: Validate baseline data-layout advisory analysis
         run: |
           cargo run --locked -p ores-analyze -- --layout examples/layout.json > target/layout-report.json
           python3 -c 'import json; d=json.load(open("target/layout-report.json")); c={x["code"] for x in d["findings"]}; assert {"ORES-LAYOUT101","ORES-LAYOUT111","ORES-LAYOUT121","ORES-LAYOUT201"} <= c; assert not d["errors"]'
+      - name: Validate evidence-based layout anti-patterns
+        run: |
+          cargo run --locked -p ores-analyze -- --layout examples/layout-antipatterns.json > target/layout-antipatterns.json
+          python3 -c 'import json; d=json.load(open("target/layout-antipatterns.json")); c={x["code"] for x in d["findings"]}; assert {"ORES-LAYOUT131","ORES-LAYOUT132","ORES-LAYOUT133","ORES-LAYOUT134","ORES-LAYOUT135"} <= c; assert not d["errors"]'

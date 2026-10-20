@@ -25,3 +25,35 @@ Stable-address requirements and whole-record access suppress layout rewrite reco
 Resource limits are part of the v1 analyzer contract: layout JSON is capped at 16 MiB by the CLI; the analyzer caps regions at 10000, fields or accessed-field entries per region at 16384, total field/access evidence at 1000000 items, and region names at 1024 UTF-8 bytes.
 
 All findings are advisory. The byte counts in the report come from declared schema widths and are not measurements of cache misses, DRAM traffic, vector occupancy, instructions, cycles, or WCET.
+
+## Optional v2 workload evidence (backwards compatible with v1)
+
+Regions may additionally supply `aosoa_tile_rows`,
+`structural_changes_per_pass`, `random_cross_column_gathers`, and
+`stable_dense_membership`. All are optional: **absence is unknown**, not
+false, zero, or an optimization proof. The schema version remains 1 because
+older v1 documents deserialize unchanged. New structural advice requires the
+specific matching non-null evidence; no source-code text/regex guesses are
+accepted as authoritative hot-path or ownership proofs.
+
+Additional advisory codes:
+
+- `ORES-LAYOUT131`: hot complete-row access against SoA may deserve an AoS/AoSoA benchmark.
+- `ORES-LAYOUT132`: source/profile-proven random cross-column gathers.
+- `ORES-LAYOUT133`: existing AoSoA tiles substantially differ from SIMD-only benchmark starting point.
+- `ORES-LAYOUT134`: dense stable ECS query might incur avoidable indirection.
+- `ORES-LAYOUT135`: measured ECS structural moves exceed one-eighth of logical entity population per pass; benchmark deferred/batched mutation and stable handles.
+- `ORES-LAYOUT017`: tile metadata is invalid or supplied for non-AoSoA layout (hard validation error).
+
+Both an AoSoA tile recommendation and ECS benchmark candidate can be wrong for a
+specific target. Use benchmark counters (cache misses, memory bandwidth, SIMD
+occupancy, TLB, branch misses, allocation/copy bytes) and the actual workload
+before changing the store. Preserve one authoritative physical representation,
+field-sensitive loans, stable generation-checked handles, actor-domain isolation,
+and mutation barriers while outstanding borrows exist.
+
+A producer in Java, C++, Rust or Oreslang must supply **typed, compiler-validated
+layout and access facts** to this common IR. Frontend adapters should emit the
+source symbol/span, trust and profile provenance, and no finding should be
+considered a safety proof or automatic rewrite. Lexical detectors may suggest
+investigation but cannot set `evidence_complete=true`.
