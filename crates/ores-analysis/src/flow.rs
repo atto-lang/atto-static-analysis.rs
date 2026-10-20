@@ -87,7 +87,10 @@ pub enum FlowOp {
     },
     Cooperate,
     Suspend,
-    /// Interprocedural summaries are not yet verified by this CFG analyzer.
+    /// Only compiler-proven *exact* constant-trip repeats are admitted.
+    /// Dynamic and maximum-only bounds are not represented by this variant.
+    Repeat { iterations: u16, operations: Vec<FlowOp> },
+    /// Interprocedural summaries are only proven for pure scalar callees.
     Call {
         target: String,
     },
@@ -122,6 +125,41 @@ impl Terminator {
         }
     }
 }
+const MAX_REPEAT_TRIPS: u16 = 64;
+const MAX_REPEAT_DEPTH: usize = 8;
+const MAX_EXPANDED_OPS: usize = 100_000;
+
+/// Expand a statically exact loop body into an owned-CFG block's operation
+/// references. Enforce work and depth limits *before* changing ownership state.
+fn expand_ops<'a>(
+    ops: &'a [FlowOp],
+    depth: usize,
+    out: &mut Vec<&'a FlowOp>,
+) -> Result<(), &'static str> {
+    if depth > MAX_REPEAT_DEPTH {
+        return Err("nested repeat depth exceeds static analysis limit");
+    }
+    for op in ops {
+        match op {
+            FlowOp::Repeat { iterations, operations } => {
+                if *iterations > MAX_REPEAT_TRIPS {
+                    return Err("unverified or excessive repeat trip count");
+                }
+                for _ in 0..*iterations {
+                    expand_ops(operations, depth + 1, out)?;
+                }
+            }
+            _ => {
+                if out.len() >= MAX_EXPANDED_OPS {
+                    return Err("expanded operation budget exceeded");
+                }
+                out.push(op);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FlowProfile {
     General,
@@ -405,6 +443,9 @@ fn step(
             }
             state.since_checkpoint = Some(0);
         }
+        FlowOp::Repeat { .. } => {
+            err("ORES-FLOW010", "repeat must be expanded before transfer checking".into());
+        }
         FlowOp::Call { target } => {
             match summaries.get(target) {
                 Some(Ok(units)) => {
@@ -470,19 +511,25 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
     let total_blocks = program.functions.iter().fold(0_usize, |sum, function| {
         sum.saturating_add(function.blocks.len())
     });
-    let total_ops = program
-        .functions
-        .iter()
-        .flat_map(|f| &f.blocks)
-        .fold(0_usize, |sum, block| sum.saturating_add(block.ops.len()));
-    if total_blocks > 4096 || total_ops > 100_000 {
+    let mut total_ops = 0_usize;
+    let mut unverified_repeat = false;
+    for function in &program.functions {
+        for block in &function.blocks {
+            let mut expanded = Vec::new();
+            if expand_ops(&block.ops, 0, &mut expanded).is_err() {
+                unverified_repeat = true;
+            }
+            total_ops = total_ops.saturating_add(expanded.len());
+        }
+    }
+    if total_blocks > 4096 || total_ops > MAX_EXPANDED_OPS || unverified_repeat {
         error(
             &mut diagnostics,
             "ORES-FLOW009",
             "<module>",
             "",
             None,
-            "global CFG exceeds block/operation admission limits",
+            "global CFG exceeds expanded-operation limits or contains unverified repeats",
         );
         return FlowReport {
             schema_version: 1,
@@ -620,7 +667,12 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
                 continue;
             };
             let block = by_id[id];
-            for (index, op) in block.ops.iter().enumerate() {
+            let mut expanded = Vec::new();
+            if let Err(reason) = expand_ops(&block.ops, 0, &mut expanded) {
+                error(&mut diagnostics, "ORES-FLOW010", &function.name, id, None, reason);
+                continue;
+            }
+            for (index, op) in expanded.iter().enumerate() {
                 step(
                     &mut state,
                     op,
@@ -920,6 +972,44 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == "ORES-FLOW500"));
+    }
+    #[test]
+    fn constant_repeat_checks_exact_aggregate_work() {
+        let src = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"repeat","iterations":3,"operations":[{"kind":"compute","units":2}]"#,
+        );
+        // Two branches have work of at most three units; repeat adds six.
+        let p: FlowProgram = serde_json::from_str(&src).unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Hard).diagnostics.iter()
+            .any(|d| d.code == "ORES-FLOW301"));
+        let admitted = src.replace(r#""max_uninterrupted_units":4"#,
+            r#""max_uninterrupted_units":10"#);
+        assert!(run(&admitted).admitted_to_static_gate);
+    }
+    #[test]
+    fn repeated_move_is_rejected_on_second_iteration() {
+        let src = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"repeat","iterations":2,"operations":[{"kind":"move","place":"x"}]"#,
+        );
+        assert!(run(&src).diagnostics.iter().any(|d| d.code == "ORES-FLOW103"));
+    }
+    #[test]
+    fn rejects_excessive_trip_count_before_expansion() {
+        let src = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"repeat","iterations":65,"operations":[{"kind":"compute","units":1}]"#,
+        );
+        assert!(run(&src).diagnostics.iter().any(|d| d.code == "ORES-FLOW009"));
+    }
+    #[test]
+    fn zero_iteration_repeat_has_no_runtime_effects() {
+        let src = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"repeat","iterations":0,"operations":[{"kind":"move","place":"x"}]"#,
+        );
+        assert!(run(&src).admitted_to_static_gate);
     }
     #[test]
     fn incomplete_calls_are_never_admitted() {
