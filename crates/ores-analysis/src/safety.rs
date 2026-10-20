@@ -373,7 +373,11 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                 }
                 Event::Cooperate => {
                     if !state.held_locks.is_empty() {
-                        err(&mut diagnostics, "ORES-SAF205", "cooperative scheduler yield while a lock is held".into());
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF205",
+                            "cooperative scheduler yield while a lock is held".into(),
+                        );
                     }
                     state.compute_since_checkpoint = Some(0);
                 }
@@ -408,7 +412,11 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::UnsafeFfi => {
-                    err(&mut diagnostics, "ORES-SAF402", "FFI has no independently checked ownership/timing contract".into());
+                    err(
+                        &mut diagnostics,
+                        "ORES-SAF402",
+                        "FFI has no independently checked ownership/timing contract".into(),
+                    );
                 }
                 Event::Call { target } => {
                     err(&mut diagnostics, "ORES-SAF500", format!("call to '{target}' lacks compositional ownership/lock/cooperation summary"));
@@ -598,7 +606,10 @@ mod tests {
     }
     #[test]
     fn yield_while_holding_lock_is_rejected() {
-        let p = case(r#"[{"kind":"lock","id":"X"},{"kind":"cooperate"},{"kind":"unlock","id":"X"}]"#, Some(10));
+        let p = case(
+            r#"[{"kind":"lock","id":"X"},{"kind":"cooperate"},{"kind":"unlock","id":"X"}]"#,
+            Some(10),
+        );
         assert!(codes(&p, SafetyProfile::General).contains(&"ORES-SAF205"));
     }
     #[test]
