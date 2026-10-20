@@ -41,9 +41,10 @@ def head(repo, expected):
     if actual != expected:
         fail("wrong reviewed commit in {}: expected {}, found {}".format(repo, expected, actual))
     # Deny edited tracked files. Ignored compiler artifacts may exist.
-    status = command(["git", "diff", "--exit-code", "HEAD", "--"], repo)
-    if status.returncode != 0:
-        fail("tracked source was modified after reviewing SHA")
+    status = command(["git", "status", "--porcelain=v1", "--untracked-files=all"], repo)
+    if status.stdout.strip():
+        fail("checkout contains staged, modified, or untracked source: " +
+             status.stdout.decode("utf-8", errors="replace")[:300])
     return actual
 
 
@@ -116,6 +117,8 @@ def main():
     parser.add_argument("--analyzer-head", required=True)
     parser.add_argument("--contract-head", required=True)
     parser.add_argument("--backend-compiler", help="Authorized local executable for Forge/LLVM/Wasm")
+    parser.add_argument("--backend-compiler-sha256",
+                        help="Independently reviewed lowercase SHA-256 of native compiler bytes")
     args = parser.parse_args()
     args.producer_repo = args.producer_repo.resolve(strict=True)
     args.analyzer_repo = args.analyzer_repo.resolve(strict=True)
@@ -125,6 +128,22 @@ def main():
         from jsonschema import Draft202012Validator, ValidationError
     except ImportError:
         fail("Install jsonschema in this authorized test environment first")
+
+    if args.backend in ("forge", "llvm", "wasm"):
+        # A checkout's Git SHA does not authenticate an arbitrary executable.
+        # Bind the native executable to an independently reviewed binary digest.
+        binary_path = args.backend_compiler or str(args.producer_repo / "build" /
+            ("oresforge" if args.backend == "forge" else "oreslang-llvmc"))
+        binary_path = pathlib.Path(binary_path).resolve(strict=True)
+        if (not binary_path.is_file() or binary_path.stat().st_size > 256*1024*1024
+                or not args.backend_compiler_sha256
+                or len(args.backend_compiler_sha256) != 64
+                or any(c not in "0123456789abcdef"
+                       for c in args.backend_compiler_sha256)):
+            fail("native compiler must be <=256 MiB and have a reviewed lowercase SHA-256")
+        if hashlib.sha256(binary_path.read_bytes()).hexdigest() != args.backend_compiler_sha256:
+            fail("native compiler executable differs from independently reviewed digest")
+        args.backend_compiler = str(binary_path)
 
     for root, sha in ((args.producer_repo, args.producer_head),
                       (args.analyzer_repo, args.analyzer_head),
@@ -143,6 +162,8 @@ def main():
         json_file = scratch / "facts.v0.json"
 
         facts = read_response(command(producer_command(args, source), args.producer_repo))
+        if source.read_bytes() != PURE:
+            fail("producer modified the exact source fixture")
         validate_fact(facts, PURE, schema, validator)
         json_file.write_text(json.dumps(facts, separators=(",", ":")), encoding="utf-8")
 
@@ -245,6 +266,9 @@ def main():
 
         # Only reach here after real producer, real analyzer, strict refusals
         # and adversarial test input all completed successfully.
+        if args.backend_compiler_sha256 and hashlib.sha256(
+                pathlib.Path(args.backend_compiler).read_bytes()).hexdigest() != args.backend_compiler_sha256:
+            fail("reviewed compiler executable changed during the test")
         print("REAL END-TO-END PASS (advisory only): {} producer -> v0 -> Rust".format(
             args.backend))
         print("reviewed producer={} analyzer={} contract={}".format(
