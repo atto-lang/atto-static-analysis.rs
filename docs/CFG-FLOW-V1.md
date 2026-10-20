@@ -27,3 +27,10 @@ The Rust compiler's small scalar subset can emit a compatible flow envelope with
     oresc --flow 6 tests/fixtures/flow-scalar.ores
 
 The compiler exporter intentionally refuses function calls, actors and async. The Java/LLVM frontends must implement and test equivalent contract producers; no C++/Java implementation is claimed here.
+
+## Security hardening (2026-10-19)
+
+- All `actor_send` operations currently emit `ORES-FLOW108`, **including** those tagged `shared_immutable` or `serialized_move`. An asserted domain label is not a freeze/lifetime/authorization proof, and claiming serialization does not prove bounded copies or allocations. Admitting actor sends must wait for verified provenance and effect certificates, not a user-supplied Boolean.
+- `soft` and `hard` profiles both reject unknown abstract compute work and missing uninterrupted-work limits. Admission is a *modeled* static gate, not a timing certification.
+- Across the entire CFG payload (not per-function only), the prototype limits blocks to 4,096 and events to 100,000. The CLI reads no more than 4 MiB of input plus one byte, then fails closed for oversized files or standard input.
+- JSON from untrusted producers remains non-authoritative: `effects_complete: true` is a compiler attestation, not proof that omitted instructions, FFI, suspension or effects do not exist.
