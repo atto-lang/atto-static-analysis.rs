@@ -15,6 +15,10 @@ jobs:
       - run: cargo test --locked --workspace --all-targets
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo run --locked -p ores-analyze -- examples/hard-realtime.json hard
+      - name: Verify forward-call IR from Rust compiler
+        run: |
+          cargo run --locked -p ores-analyze -- examples/forward-from-rust-compiler.json hard > target/forward-report.json
+          python3 -c 'import json; d=json.load(open("target/forward-report.json")); assert d["functions"]["main"]["operations_upper_bound"] == 6; assert not d["diagnostics"]'
       - name: Reject unsafe program
         run: |
           if cargo run --locked -p ores-analyze -- examples/unsafe.json hard; then
