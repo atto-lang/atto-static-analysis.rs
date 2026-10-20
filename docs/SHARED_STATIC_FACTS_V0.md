@@ -35,3 +35,7 @@ This importer is intentionally not a competing full implementation of the shared
 - Add authenticated producer provenance, actual typed CFG/source spans and verified lowering completeness before any strict profile.
 - Preserve full backend effect path for actor spawning, async, `await`, `HasFuture<T>`, FFI, security taint, and Zalgo callback timing/borrow effects; no silent fallback.
 - Evolve to a common typed HIR/MIR and converged Rust source analyzer; independent Java and LLVM checkers can continue until source-level parity is proven.
+
+## Deterministic two-repository smoke gate
+
+`bash scripts/test-java-static-facts-roundtrip.sh /path/to/oreslang-source.java` runs the pinned Java source-facing JUnit tests, exports recursive and scalar .ores programs, checks SHA-256 against their exact source bytes, runs Rust importer tests and validates recursive `ORES-SA102` with no falsely finite allocation bound. It operates only on two existing local checkouts and **does not copy private source across GitHub organizations**. This runner is committed but **not executed in this session**; it must be run on authorized CI with real executed steps. The restricted importer additionally limits input to 512 procedures / 8192 call edges until the Rust reference engine has an iterative interprocedural traversal.
