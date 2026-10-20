@@ -194,6 +194,27 @@ def main():
         validator.validate(forged)
         reject_modified(forged)
 
+        duplicate = copy.deepcopy(facts)
+        duplicate["edges"] = [
+            {"from":"__root__.main/0", "to":"__root__.main/0",
+             "kind":"call", "fanout":1, "guard":"unproved"},
+            {"from":"__root__.main/0", "to":"__root__.main/0",
+             "kind":"call", "fanout":1, "guard":"unproved"}]
+        validator.validate(duplicate)
+        reject_modified(duplicate)
+
+        invalid_location = copy.deepcopy(facts)
+        invalid_location["procedures"][0]["loops"] = [
+            {"id":"L1", "exit":"unknown", "safepoint":False,
+             "location":{"path":"src/main.ores","line":0}}]
+        try:
+            validator.validate(invalid_location)
+        except ValidationError:
+            pass
+        else:
+            fail("schema accepted a zero source-location line")
+        reject_modified(invalid_location)
+
         looped = copy.deepcopy(facts)
         looped["procedures"][0]["loops"] = [
             {"id":"L1", "exit":"unknown", "safepoint":False}]
