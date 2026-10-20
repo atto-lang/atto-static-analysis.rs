@@ -35,6 +35,10 @@ pub enum Operation {
     Copy {
         bytes: Option<u64>,
     },
+    /// Abstract scalar MIR work units (not CPU instructions or WCET).
+    Compute {
+        units: u64,
+    },
     BlockingIo,
     UnboundedWait,
     UnsafeFfi,
@@ -214,6 +218,7 @@ impl Engine<'_> {
             match operation {
                 Operation::Allocate { bytes } => effect.allocations_upper_bound = *bytes,
                 Operation::Copy { bytes } => effect.copies_upper_bound = *bytes,
+                Operation::Compute { units } => effect.operations_upper_bound = Some(*units),
                 Operation::BlockingIo => effect.may_block = true,
                 Operation::UnboundedWait => effect.may_wait_unbounded = true,
                 Operation::UnsafeFfi => effect.may_use_unsafe_ffi = true,
@@ -416,6 +421,34 @@ mod tests {
         assert!(!report.has_errors());
         assert_eq!(report.assurance_level, ASSURANCE_LEVEL);
         assert_ne!(report.assurance_level, "certified_hard_realtime");
+    }
+    #[test]
+    fn compute_units_accumulate_but_never_prove_execution_time() {
+        let program = sample(vec![
+            Operation::Compute { units: 2 },
+            Operation::Compute { units: 3 },
+        ]);
+        let report = analyze(&program, Profile::HardRealtime);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        let summary = &report.functions["main"];
+        assert_eq!(summary.operations_upper_bound, Some(5));
+        assert_eq!(summary.allocations_upper_bound, Some(0));
+        assert_eq!(summary.copies_upper_bound, Some(0));
+        assert_eq!(report.assurance_level, ASSURANCE_LEVEL);
+    }
+    #[test]
+    fn compute_without_units_is_invalid_ir() {
+        let invalid = r#"{"schema_version":1,"functions":[{"name":"f","operations":[{"kind":"compute"}]}]}"#;
+        assert!(serde_json::from_str::<Program>(invalid).is_err());
+    }
+    #[test]
+    fn compute_units_overflow_to_unknown_not_zero() {
+        let report = analyze(&sample(vec![
+            Operation::Compute { units: u64::MAX },
+            Operation::Compute { units: 2 },
+        ]), Profile::HardRealtime);
+        assert!(report.has_errors());
+        assert_eq!(report.functions["main"].operations_upper_bound, None);
     }
     #[test]
     fn scalar_compiler_v1_fixture_is_valid_and_still_advisory() {
