@@ -8,6 +8,19 @@ RUST_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 command -v mvn >/dev/null || { echo "Maven required" >&2; exit 2; }
 command -v cargo >/dev/null || { echo "Cargo required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "Python required" >&2; exit 2; }
+command -v git >/dev/null || { echo "Git required for exact-head identity" >&2; exit 2; }
+java_head="$(git -C "$JAVA_ROOT" rev-parse HEAD)"
+rust_head="$(git -C "$RUST_ROOT" rev-parse HEAD)"
+echo "Java source HEAD: $java_head"
+echo "Rust analyzer HEAD: $rust_head"
+if [[ -n "${EXPECTED_JAVA_HEAD:-}" && "$java_head" != "$EXPECTED_JAVA_HEAD" ]]; then
+  echo "Java checkout differs from expected source commit" >&2
+  exit 2
+fi
+if [[ -n "${EXPECTED_RUST_HEAD:-}" && "$rust_head" != "$EXPECTED_RUST_HEAD" ]]; then
+  echo "Rust checkout differs from expected source commit" >&2
+  exit 2
+fi
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -63,6 +76,19 @@ fi
   cd "$RUST_ROOT"
   cargo run --locked -q -p ores-analyze --     --static-facts "$scratch/scalar.json" general > "$scratch/scalar-report.json"
 )
+
+# An unsigned scalar bridge must NEVER be admitted as a hard-profile proof.
+set +e
+(
+  cd "$RUST_ROOT"
+  cargo run --locked -q -p ores-analyze -- --static-facts "$scratch/scalar.json" hard > "$scratch/strict-report.json"
+)
+strict_status=$?
+set -e
+if [[ "$strict_status" -ne 2 ]]; then
+  echo "Unsigned static facts unexpectedly admitted to strict profile: $strict_status" >&2
+  exit 1
+fi
 
 python3 - "$scratch" <<'PY'
 import json, pathlib, sys
