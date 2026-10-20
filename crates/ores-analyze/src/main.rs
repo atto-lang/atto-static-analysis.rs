@@ -30,22 +30,30 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let input = if path == "-" {
-        let mut buffer = String::new();
-        match io::stdin().read_to_string(&mut buffer) {
-            Ok(_) => Ok(buffer),
+    // Treat effect/CFG JSON as untrusted input. Bounded streaming reads
+    // protect the CLI from unbounded stdin and enormous local files alike.
+    const MAX_INPUT_BYTES: u64 = 4 * 1024 * 1024;
+    let mut data = String::new();
+    let result = if path == "-" {
+        io::stdin()
+            .take(MAX_INPUT_BYTES + 1)
+            .read_to_string(&mut data)
+    } else {
+        match fs::File::open(path) {
+            Ok(file) => file
+                .take(MAX_INPUT_BYTES + 1)
+                .read_to_string(&mut data),
             Err(err) => Err(err),
         }
-    } else {
-        fs::read_to_string(path)
     };
-    let data = match input {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("cannot read input: {err}");
-            return ExitCode::from(2);
-        }
-    };
+    if let Err(err) = result {
+        eprintln!("cannot read input: {err}");
+        return ExitCode::from(2);
+    }
+    if data.len() as u64 > MAX_INPUT_BYTES {
+        eprintln!("input too large: maximum 4 MiB");
+        return ExitCode::from(2);
+    }
     if mode == "--flow" {
         let program: FlowProgram = match serde_json::from_str(&data) {
             Ok(value) => value,
