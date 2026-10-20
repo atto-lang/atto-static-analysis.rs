@@ -372,6 +372,9 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::Cooperate => {
+                    if !state.held_locks.is_empty() {
+                        err(&mut diagnostics, "ORES-SAF205", "cooperative scheduler yield while a lock is held".into());
+                    }
                     state.compute_since_checkpoint = Some(0);
                 }
                 Event::Suspend => {
@@ -405,13 +408,7 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::UnsafeFfi => {
-                    if profile != SafetyProfile::General {
-                        err(
-                            &mut diagnostics,
-                            "ORES-SAF402",
-                            "FFI has no independently checked timing/ownership contract".into(),
-                        );
-                    }
+                    err(&mut diagnostics, "ORES-SAF402", "FFI has no independently checked ownership/timing contract".into());
                 }
                 Event::Call { target } => {
                     err(&mut diagnostics, "ORES-SAF500", format!("call to '{target}' lacks compositional ownership/lock/cooperation summary"));
@@ -598,6 +595,16 @@ mod tests {
     fn unknown_compute_cost_rejected() {
         let p = case(r#"[{"kind":"compute","units":null}]"#, Some(10));
         assert!(codes(&p, SafetyProfile::Hard).contains(&"ORES-SAF300"));
+    }
+    #[test]
+    fn yield_while_holding_lock_is_rejected() {
+        let p = case(r#"[{"kind":"lock","id":"X"},{"kind":"cooperate"},{"kind":"unlock","id":"X"}]"#, Some(10));
+        assert!(codes(&p, SafetyProfile::General).contains(&"ORES-SAF205"));
+    }
+    #[test]
+    fn unchecked_ffi_cannot_pass_general_safety_gate() {
+        let p = case(r#"[{"kind":"unsafe_ffi"}]"#, None);
+        assert!(codes(&p, SafetyProfile::General).contains(&"ORES-SAF402"));
     }
     #[test]
     fn unhandled_error_rejected() {
