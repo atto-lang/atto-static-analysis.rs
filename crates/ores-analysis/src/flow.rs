@@ -315,6 +315,15 @@ fn step(
             }
         }
         FlowOp::ActorSend { place, transfer } => {
+            // Matching an asserted domain is not proof of freeze/authorization
+            // or bounded serialization. Until compiler-issued transfer contracts
+            // are independently validated, no actor transfer is admissible.
+            err(
+                "ORES-FLOW108",
+                format!(
+                    "actor transfer '{place}' ({transfer:?}) has no verified freeze/domain/serialization contract"
+                ),
+            );
             if !state.available(place) || state.loan_counts(place) != (0, 0) {
                 err(
                     "ORES-FLOW106",
@@ -359,7 +368,7 @@ fn step(
             state.since_checkpoint = state
                 .since_checkpoint
                 .and_then(|x| x.checked_add((*units)?));
-            if profile == FlowProfile::Hard && state.since_checkpoint.is_none() {
+            if profile != FlowProfile::General && state.since_checkpoint.is_none() {
                 err(
                     "ORES-FLOW300",
                     "unknown or overflowing compute-work bound".into(),
@@ -426,6 +435,32 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
             "invalid function count",
         );
     }
+    // Global bounds apply even when every individual function is small.
+    // Saturating arithmetic prevents a hostile in-memory program bypassing
+    // this check on platforms with narrower usize.
+    let total_blocks = program.functions.iter().fold(0_usize, |sum, function| {
+        sum.saturating_add(function.blocks.len())
+    });
+    let total_ops = program.functions.iter().flat_map(|f| &f.blocks).fold(
+        0_usize, |sum, block| sum.saturating_add(block.ops.len())
+    );
+    if total_blocks > 4096 || total_ops > 100_000 {
+        error(
+            &mut diagnostics,
+            "ORES-FLOW009",
+            "<module>",
+            "",
+            None,
+            "global CFG exceeds block/operation admission limits",
+        );
+        return FlowReport {
+            schema_version: 1,
+            assurance_scope: "compiler-emitted acyclic CFG contract only; not verified WCET",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+        };
+    }
     let mut seen_functions = HashSet::new();
     for function in &program.functions {
         if function.name.trim().is_empty() || !seen_functions.insert(&function.name) {
@@ -438,14 +473,14 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
                 "blank or duplicate function name",
             );
         }
-        if profile == FlowProfile::Hard && function.max_uninterrupted_units.is_none() {
+        if profile != FlowProfile::General && function.max_uninterrupted_units.is_none() {
             error(
                 &mut diagnostics,
                 "ORES-FLOW300",
                 &function.name,
                 "",
                 None,
-                "hard-RT requires explicit uninterrupted-work budget",
+                "real-time profile requires explicit uninterrupted-work budget",
             );
         }
         if function.blocks.is_empty()
@@ -722,6 +757,68 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == "ORES-FLOW001"));
+    }
+    #[test]
+    fn rejects_unverified_shared_capability_even_with_asserted_domain() {
+        let input = SAFE.replace(
+            r#""domain":"actor_private""#,
+            r#""domain":"shared_immutable""#,
+        ).replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"actor_send","place":"x","transfer":"shared_capability""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW108"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn rejects_unproven_serialized_actor_move() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"actor_send","place":"x","transfer":"serialized_move""#,
+        );
+        assert!(run(&input).diagnostics.iter().any(|d| d.code == "ORES-FLOW108"));
+    }
+
+    #[test]
+    fn soft_realtime_does_not_admit_unknown_compute() {
+        let input = SAFE.replace(r#""units":2"#, r#""units":null"#);
+        let p: FlowProgram = serde_json::from_str(&input).unwrap();
+        let report = analyze_flow(&p, FlowProfile::Soft);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW300"));
+    }
+
+    #[test]
+    fn soft_realtime_requires_explicit_budget() {
+        let input = SAFE.replace(
+            r#""max_uninterrupted_units":4"#,
+            r#""max_uninterrupted_units":null"#,
+        );
+        let p: FlowProgram = serde_json::from_str(&input).unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Soft)
+            .diagnostics.iter().any(|d| d.code == "ORES-FLOW300"));
+    }
+
+
+    #[test]
+    fn rejects_global_cfg_operations_budget() {
+        let mut p: FlowProgram = serde_json::from_str(SAFE).unwrap();
+        // Each function has <= 100k operations, but all functions together do not.
+        let mut functions = Vec::new();
+        for n in 0..12 {
+            let mut f: FlowFunction = serde_json::from_str(
+                r#"{"name":"f","entry":"entry","max_uninterrupted_units":10000,
+                    "blocks":[{"id":"entry","ops":[],"terminator":{"kind":"return"}}]}"#
+            ).unwrap();
+            f.name = format!("f{n}");
+            f.blocks[0].ops = (0..9000).map(|_| FlowOp::Compute { units: Some(0) }).collect();
+            functions.push(f);
+        }
+        p.functions = functions;
+        let report = analyze_flow(&p, FlowProfile::Hard);
+        assert!(!report.admitted_to_static_gate);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW009"));
     }
     #[test]
     fn incomplete_calls_are_never_admitted() {
