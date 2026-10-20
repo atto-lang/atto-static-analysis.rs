@@ -1,3 +1,4 @@
+pub mod safety;
 //! Prototype, versioned MIR-effect static analyzer for all Oreslang frontends.
 //! Conservative on absent bounds and unresolvable callees. No proof of WCET.
 use serde::{Deserialize, Serialize};
