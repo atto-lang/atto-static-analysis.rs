@@ -77,12 +77,14 @@ impl SharedFactsV0 {
         }
         let mut index = HashMap::new();
         let mut functions = Vec::with_capacity(self.procedures.len());
+        let mut total_loops = 0usize;
         for fact in &self.procedures {
             if !identifier(&fact.id) || index.insert(fact.id.as_str(), functions.len()).is_some() {
                 return Err("invalid or duplicated procedure identity".into());
             }
-            if fact.loops.len() > 20_000 {
-                return Err("procedure exceeds loop limit".into());
+            total_loops = total_loops.saturating_add(fact.loops.len());
+            if fact.loops.len() > 256 || total_loops > 4_096 {
+                return Err("static-facts loop work exceeds conservative analysis budget".into());
             }
             let mut loops = HashSet::new();
             for l in &fact.loops {
@@ -110,7 +112,11 @@ impl SharedFactsV0 {
             }
             functions.push(Function { name: fact.id.clone(), operations });
         }
+        let mut seen_edges = HashSet::new();
         for e in &self.edges {
+            if !seen_edges.insert((e.source.as_str(), e.to.as_str())) {
+                return Err("duplicate call edge is not a proof of repeated-call fanout".into());
+            }
             if e.kind != "call" || e.fanout != 1 || e.guard != "unproved" {
                 return Err("non-scalar edge or forged cycle bound rejected".into());
             }
@@ -180,6 +186,28 @@ mod tests {
     fn schema_extra_fields_rejected() {
         let text = GOOD.replace("\"unit\":", "\"producer_claim\":\"trusted\",\"unit\":");
         assert!(serde_json::from_str::<SharedFactsV0>(&text).is_err());
+    }
+
+    #[test]
+    fn duplicated_call_edges_fail_closed_instead_of_disappearing() {
+        let source = GOOD.replace(
+            "\"edges\":[",
+            "\"edges\":[{\"from\":\"__root__.main/0\",\"to\":\"__root__.again/1\",\"kind\":\"call\",\"fanout\":1,\"guard\":\"unproved\"},"
+        );
+        let facts: SharedFactsV0 = serde_json::from_str(&source).unwrap();
+        assert!(facts.advisory_effect_ir().is_err());
+    }
+
+    #[test]
+    fn oversized_loop_facts_are_rejected_before_ir_allocation() {
+        let mut doc: serde_json::Value = serde_json::from_str(GOOD).unwrap();
+        doc["procedures"][0]["loops"] = serde_json::Value::Array(
+            (0..257).map(|i| serde_json::json!({
+                "id": format!("L{i}"), "exit":"unknown", "safepoint":false
+            })).collect()
+        );
+        let facts: SharedFactsV0 = serde_json::from_value(doc).unwrap();
+        assert!(facts.advisory_effect_ir().is_err());
     }
 
     #[test]
