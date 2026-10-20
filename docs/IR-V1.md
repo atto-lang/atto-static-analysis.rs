@@ -17,3 +17,14 @@ checks only the supplied abstract effects. It **cannot** certify hard-real-time
 execution or establish that a supplied JSON file corresponds to actual source.
 Until authenticated source-to-IR and target-specific WCET are implemented, no
 policy engine may treat a successful `hard` result as a certification token.
+
+### Rust scalar-producer golden fixture
+
+`examples/rust-scalar-expected.json` is byte-for-byte equal (ignoring
+the trailing fixture newline) to the compiler's
+`examples/scalar-effect-ir-v1.json`. The SHA-256 of the JSON bytes is
+`8ee1adbf6faef704c1eb6d2b2075c3b2d723097037f646f9e6e518a69d005463`.
+The expression `40+2` yields exactly three `compute(units=1)`
+effects (two literals and one addition) and zero modeled allocations
+or copies. This proves contract conformance for the narrow scalar subset,
+**not** provenance of arbitrary supplied JSON or target hard-real-time safety.
