@@ -192,6 +192,59 @@ fn cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
 }
 pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> SafetyReport {
     let mut diagnostics = Vec::new();
+    // A complete flag is not a proof; never traverse unbounded producer data.
+    // The quotas also bound recursive lock-cycle search depth.
+    const MAX_FUNCTIONS: usize = 1024;
+    const MAX_EVENTS: usize = 65_536;
+    const MAX_LOCK_NODES: usize = 4096;
+    const MAX_SYMBOL_BYTES: usize = 256;
+    let mut total_events = 0usize;
+    let mut distinct_locks = HashSet::new();
+    let mut invalid = program.functions.is_empty()
+        || program.functions.len() > MAX_FUNCTIONS;
+    if !invalid {
+        for function in &program.functions {
+            invalid |= function.name.len() > MAX_SYMBOL_BYTES
+                || function.control_flow.len() > 32;
+            if function.events.len() > MAX_EVENTS.saturating_sub(total_events) {
+                invalid = true;
+                break;
+            }
+            total_events += function.events.len();
+            for event in &function.events {
+                let labels: &[&str] = match event {
+                    Event::Define { place } | Event::Read { place }
+                    | Event::Write { place } | Event::Move { place }
+                    | Event::ActorTransfer { place, .. } => std::slice::from_ref(&place.as_str()),
+                    Event::Borrow { place, loan, .. } => &[place, loan],
+                    Event::EndBorrow { loan } => std::slice::from_ref(&loan.as_str()),
+                    Event::Lock { id } | Event::Unlock { id } => {
+                        distinct_locks.insert(id.as_str());
+                        std::slice::from_ref(&id.as_str())
+                    },
+                    Event::Call { target } => std::slice::from_ref(&target.as_str()),
+                    Event::MayFail { error } | Event::Catch { error }
+                    | Event::Propagate { error } => std::slice::from_ref(&error.as_str()),
+                    _ => &[],
+                };
+                invalid |= labels.iter().any(|label| label.len() > MAX_SYMBOL_BYTES);
+                if invalid || distinct_locks.len() > MAX_LOCK_NODES { break; }
+            }
+            if invalid || distinct_locks.len() > MAX_LOCK_NODES { break; }
+        }
+    }
+    if invalid || distinct_locks.len() > MAX_LOCK_NODES {
+        report(&mut diagnostics, "ORES-SAF004", "<module>", None, "error",
+            "safety model exceeds bounded function/event/lock/symbol resources");
+        return SafetyReport {
+            schema_version: 1,
+            assurance_scope: "checked_linear_effect_ir_only; resource admission failed",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+            lock_order_edges: BTreeMap::new(),
+        };
+    }
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if program.schema_version != 1 || !program.effects_complete {
         report(
@@ -541,6 +594,23 @@ mod tests {
             .iter()
             .map(|d| d.code)
             .collect()
+    }
+    #[test]
+    fn rejects_oversized_model_before_recursive_lock_proof() {
+        let mut p = case("[]", Some(10));
+        p.functions[0].events = (0..65_537).map(|i| Event::Lock { id: format!("lock_{i}") }).collect();
+        let r = analyze_safety(&p, SafetyProfile::Hard);
+        assert!(!r.admitted_to_static_gate);
+        assert!(r.diagnostics.iter().any(|d| d.code == "ORES-SAF004"));
+        assert!(r.lock_order_edges.is_empty());
+    }
+    #[test]
+    fn rejects_excessive_symbol_and_empty_program() {
+        let p = case(&format!(r#"[{{"kind":"define","place":"{}"}}]"#, "x".repeat(257)), Some(10));
+        assert!(codes(&p, SafetyProfile::General).contains(&"ORES-SAF004"));
+        let mut empty = case("[]", Some(10));
+        empty.functions.clear();
+        assert!(codes(&empty, SafetyProfile::General).contains(&"ORES-SAF004"));
     }
     #[test]
     fn valid_loan_and_cooperation_admitted() {
