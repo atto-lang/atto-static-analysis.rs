@@ -34,3 +34,17 @@ The compiler exporter intentionally refuses function calls, actors and async. Th
 - `soft` and `hard` profiles both reject unknown abstract compute work and missing uninterrupted-work limits. Admission is a *modeled* static gate, not a timing certification.
 - Across the entire CFG payload (not per-function only), the prototype limits blocks to 4,096 and events to 100,000. The CLI reads no more than 4 MiB of input plus one byte, then fails closed for oversized files or standard input.
 - JSON from untrusted producers remains non-authoritative: `effects_complete: true` is a compiler attestation, not proof that omitted instructions, FFI, suspension or effects do not exist.
+
+## Exact-count structured loops (stacked prototype)
+
+The optional `{"kind":"repeat","iterations":N,"operations":[...]}` operation
+represents a **compiler-proven exact trip count**, not a runtime loop with an
+unproven or merely estimated upper bound. The verifier expands the body before
+applying the same ownership and cooperation rules to every executed iteration.
+The prototype limits repeats to 64 trips, nested depth to eight, and expanded
+events to 100,000 across the input. A missing/dynamic count, larger repeat, or
+resource-exhausting expansion is rejected.
+
+This is not general CFG cyclic-loop support. Arbitrary backedges remain rejected
+until loop invariants, zero-to-N exits, widening and suspension semantics are
+formally specified. The scalar compiler does not yet produce this repeat event.
