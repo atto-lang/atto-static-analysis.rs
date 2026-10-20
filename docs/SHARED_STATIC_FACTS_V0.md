@@ -29,6 +29,31 @@ The importer converts direct calls to existing Rust `Operation::Call` and unknow
 
 This importer is intentionally not a competing full implementation of the shared Python analyzer; it reuses the existing Rust operations engine for the supported scalar-call and loop subset. The Python model remains the schema/conformance oracle for amplification, security and callback timing while richer compiler-issued IR and backend facts are implemented.
 
+## Exact-head local gate
+
+The committed integration script accepts two *existing authorized local checkouts*:
+
+```sh
+EXPECTED_JAVA_HEAD=<reviewed-java-sha> \\
+EXPECTED_RUST_HEAD=<reviewed-rust-sha> \\
+bash scripts/test-java-static-facts-roundtrip.sh /path/to/oreslang-source.java
+```
+
+It emits the checked-out Git HEAD values, requires them to match the optional
+reviewed commit SHAs, verifies source byte hashes, exercises recursive and
+scalar source programs, and requires a **2 (rejected)** exit from
+`ores-analyze --static-facts ... hard`. Rejections remain required even if
+the scalar program has no visible resource effects: compiler provenance and
+lowering completeness have not been authenticated. If expected SHAs are
+unset, the gate prints the actual heads but does **not** establish that they
+match a reviewer-approved source revision.
+
+Limits are 512 functions, 8,192 direct call edges, at most 256 loops/procedure
+and 4,096 loops/document. Corresponding Java exporter branch PR #1685 now
+enforces the same limits, and rejects duplicate caller/callee callsites and
+calls inside loops, because the current v0 edge format does not preserve
+callsite multiplicity or enclosing-loop work effects.
+
 ## Outstanding work
 
 - Build and test both exact source trees; current repo org Actions jobs have been failing before execution. The new Rust unit tests have not yet run on an allocated runner.
