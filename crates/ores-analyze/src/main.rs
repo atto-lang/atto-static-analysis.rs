@@ -1,5 +1,13 @@
-use ores_analysis::{analyze, safety::{analyze_safety, SafetyProfile, SafetyProgram}, Profile, Program};
-use std::{env, fs, io::{self, Read}, process::ExitCode};
+use ores_analysis::{
+    analyze,
+    safety::{analyze_safety, SafetyProfile, SafetyProgram},
+    Profile, Program,
+};
+use std::{
+    env, fs,
+    io::{self, Read},
+    process::ExitCode,
+};
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let (safety, path, profile_name) = match args.as_slice() {
@@ -56,7 +64,11 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
-        if result.admitted_to_static_gate { ExitCode::SUCCESS } else { ExitCode::from(1) }
+        if result.admitted_to_static_gate {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        }
     } else {
         let program: Program = match serde_json::from_str(&data) {
             Ok(value) => value,
@@ -73,6 +85,10 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
-        if result.has_errors() { ExitCode::from(1) } else { ExitCode::SUCCESS }
+        if result.has_errors() {
+            ExitCode::from(1)
+        } else {
+            ExitCode::SUCCESS
+        }
     }
 }
