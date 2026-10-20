@@ -65,7 +65,9 @@ impl SharedFactsV0 {
         {
             return Err("unverified or malformed source identity; expected sha256:<64 lowercase hex>".into());
         }
-        if self.procedures.is_empty() || self.procedures.len() > 10_000 || self.edges.len() > 50_000 {
+        // Bound importer graph size below the recursive reference engine's
+        // stack-sensitive call traversal until iterative SCC lowering exists.
+        if self.procedures.is_empty() || self.procedures.len() > 512 || self.edges.len() > 8_192 {
             return Err("invalid static facts collection size".into());
         }
         if !self.taint_sources.is_empty() || !self.flows.is_empty() || !self.sinks.is_empty()
