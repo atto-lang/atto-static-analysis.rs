@@ -79,13 +79,17 @@ python3 scripts/verify-cross-backend-static-facts-v0.py \\
 
 The `--backend` choices are `js`, `rs`, `net`, `forge`, `llvm`,
 `wasm`. Forge, LLVM and Wasm require a **previously authorized local native
-compiler executable** (pass `--backend-compiler /absolute/path`). For LLVM
-and Forge the local CMake compiler can otherwise be selected from `build/`;
-Wasm always requires `--backend-compiler` because it runs the actual native
-LLVM→Clang→Wasm producer bridge. It does not manufacture missing compilers,
+compiler executable**, and now require `--backend-compiler-sha256 <independently-reviewed-64-hex-digest>`.
+Pass `--backend-compiler /absolute/path` for an explicitly selected executable;
+Forge and LLVM can use the local CMake compiler from `build/`. Wasm always
+requires `--backend-compiler` because it runs the actual native
+LLVM→Clang→Wasm producer bridge, and the expected digest is forwarded into
+that bridge. Binding compiler bytes **still does not prove** they were
+compiled from the reviewed Git commit; trusted build provenance remains needed. It does not manufacture missing compilers,
 simulate a toolchain, or fetch private source into another organization.
 
-A genuine PASS requires, in sequence: byte-for-byte committed source
+A genuine PASS requires, in sequence: exact clean reviewed Git checkouts,
+pinned native compiler bytes when applicable, byte-for-byte source
 identity; the real compiler's emitted JSON; validation using the exact
 reviewed schema; canonical `main/0` with **no falsely invented effects**;
 the real Rust `general` report with `advisory_only=true`,
