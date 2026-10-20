@@ -1,5 +1,9 @@
 use ores_analysis::{analyze, Profile, Program, MAX_IR_BYTES};
-use std::{env, fs, io::{self, Read}, process::ExitCode};
+use std::{
+    env, fs,
+    io::{self, Read},
+    process::ExitCode,
+};
 fn read_ir(path: &str) -> io::Result<String> {
     let reader: Box<dyn Read> = if path == "-" {
         Box::new(io::stdin())
@@ -24,20 +28,36 @@ fn main() -> ExitCode {
         "general" => Profile::General,
         "soft" => Profile::SoftRealtime,
         "hard" => Profile::HardRealtime,
-        _ => { eprintln!("unknown profile: {}", args[2]); return ExitCode::from(2); }
+        _ => {
+            eprintln!("unknown profile: {}", args[2]);
+            return ExitCode::from(2);
+        }
     };
     let input = read_ir(&args[1]);
     let program: Program = match input {
         Ok(data) => match serde_json::from_str(&data) {
             Ok(program) => program,
-            Err(error) => { eprintln!("invalid effect IR: {error}"); return ExitCode::from(2); }
+            Err(error) => {
+                eprintln!("invalid effect IR: {error}");
+                return ExitCode::from(2);
+            }
         },
-        Err(error) => { eprintln!("cannot read input: {error}"); return ExitCode::from(2); }
+        Err(error) => {
+            eprintln!("cannot read input: {error}");
+            return ExitCode::from(2);
+        }
     };
     let report = analyze(&program, profile);
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
-        Err(error) => { eprintln!("serialization failed: {error}"); return ExitCode::from(2); }
+        Err(error) => {
+            eprintln!("serialization failed: {error}");
+            return ExitCode::from(2);
+        }
     }
-    if report.has_errors() { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    if report.has_errors() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
