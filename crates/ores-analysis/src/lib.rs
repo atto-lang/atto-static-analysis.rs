@@ -26,6 +26,10 @@ pub enum Operation {
     Copy {
         bytes: Option<u64>,
     },
+    /// Abstract compute units from a checked language-level MIR, not cycles/WCET.
+    Compute {
+        units: Option<u64>,
+    },
     BlockingIo,
     UnboundedWait,
     UnsafeFfi,
@@ -200,6 +204,7 @@ impl Engine<'_> {
             match operation {
                 Operation::Allocate { bytes } => effect.allocations_upper_bound = *bytes,
                 Operation::Copy { bytes } => effect.copies_upper_bound = *bytes,
+                Operation::Compute { units } => effect.operations_upper_bound = *units,
                 Operation::BlockingIo => effect.may_block = true,
                 Operation::UnboundedWait => effect.may_wait_unbounded = true,
                 Operation::UnsafeFfi => effect.may_use_unsafe_ffi = true,
@@ -356,6 +361,20 @@ mod tests {
                 operations,
             }],
         }
+    }
+    #[test]
+    fn compute_units_propagate_across_calls() {
+        let input = r#"{"schema_version":1,"functions":[{"name":"main","operations":[{"kind":"compute","units":2},{"kind":"call","target":"callee"}]},{"name":"callee","operations":[{"kind":"compute","units":3}]}]}"#;
+        let program: Program = serde_json::from_str(input).unwrap();
+        let report = analyze(&program, Profile::HardRealtime);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        assert_eq!(report.functions["main"].operations_upper_bound, Some(6));
+    }
+    #[test]
+    fn unknown_compute_bound_rejected_for_hard_profile() {
+        let input = r#"{"schema_version":1,"functions":[{"name":"main","operations":[{"kind":"compute","units":null}]}]}"#;
+        let program: Program = serde_json::from_str(input).unwrap();
+        assert!(analyze(&program, Profile::HardRealtime).has_errors());
     }
     #[test]
     fn rejects_omitted_effect_list() {
