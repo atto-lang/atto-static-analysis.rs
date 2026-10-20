@@ -64,6 +64,9 @@ struct Loan {
 struct Flow {
     /// A place is definitely usable only if owned on every incoming path.
     owned: BTreeMap<String, bool>,
+    /// Defining block/event identity; branch-local definitions cannot be
+    /// silently coalesced at a join without a validated phi/merge operation.
+    origins: BTreeMap<String, String>,
     loans: BTreeMap<String, Loan>,
     held_locks: Vec<String>,
     pending_errors: BTreeSet<String>,
@@ -283,7 +286,19 @@ fn merge(
     for place in names {
         merged.insert(place.clone(), old.owned(&place) && next.owned(&place));
     }
+    for (place, usable) in &mut merged {
+        if *usable && old.origins.get(place) != next.origins.get(place) {
+            diagnostic(
+                diagnostics, "ORES-CFG103", name, None,
+                format!("incompatible defining sites for owned place {place} at join {block}; typed phi required"),
+            );
+            *usable = false;
+        }
+    }
     old.owned = merged;
+    old.origins.retain(|place, origin| {
+        old.owned.get(place) == Some(&true) && next.origins.get(place) == Some(origin)
+    });
     if old.loans != next.loans {
         diagnostic(diagnostics, "ORES-CFG100", name, None,
             format!("incompatible live-loan sets at join {block}; require matched lifetimes on all paths"));
@@ -405,6 +420,7 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                             );
                         } else {
                             state.owned.insert(place.clone(), true);
+                            state.origins.insert(place.clone(), format!("{id}:{i}"));
                         }
                     }
                     Event::Read { place } => {
@@ -785,6 +801,33 @@ mod tests {
             SafetyProfile::General,
         );
         assert!(has(&r, "ORES-CFG111"), "{:?}", r.diagnostics);
+    }
+    #[test]
+    fn different_branch_definitions_require_validated_phi() {
+        let r = run(
+            &base(r#"[
+              {"id":"a","events":[{"kind":"define","place":"cond"}],"terminator":{"kind":"branch","condition":"cond","then_block":"b","else_block":"c"}},
+              {"id":"b","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
+              {"id":"c","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
+              {"id":"d","events":[{"kind":"read","place":"x"}],"terminator":{"kind":"return"}}
+            ]"#),
+            SafetyProfile::General,
+        );
+        assert!(has(&r, "ORES-CFG103"), "{:?}", r.diagnostics);
+        assert!(has(&r, "ORES-CFG111"), "{:?}", r.diagnostics);
+    }
+    #[test]
+    fn different_branch_definitions_are_not_reconciled_by_join_order() {
+        let r = run(
+            &base(r#"[
+              {"id":"a","events":[{"kind":"define","place":"cond"}],"terminator":{"kind":"branch","condition":"cond","then_block":"z","else_block":"b"}},
+              {"id":"z","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
+              {"id":"b","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
+              {"id":"d","events":[{"kind":"read","place":"x"}],"terminator":{"kind":"return"}}
+            ]"#),
+            SafetyProfile::General,
+        );
+        assert!(has(&r, "ORES-CFG103"), "{:?}", r.diagnostics);
     }
     #[test]
     fn live_loan_disagreement_at_join_rejected() {
