@@ -23,28 +23,23 @@ fn read_input(path: &str) -> io::Result<String> {
 }
 
 fn read_layout_input(path: &str) -> io::Result<String> {
+    // Limit actual bytes read, not merely an initial stat() result. Files
+    // may grow after metadata checks or be special files/FIFOs.
+    let mut buffer = String::new();
     if path == "-" {
         let stdin = io::stdin();
-        let mut limited = stdin.lock().take(MAX_LAYOUT_INPUT_BYTES + 1);
-        let mut buffer = String::new();
-        limited.read_to_string(&mut buffer)?;
-        if buffer.len() as u64 > MAX_LAYOUT_INPUT_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "layout IR exceeds 16 MiB input limit",
-            ));
-        }
-        Ok(buffer)
+        stdin.lock().take(MAX_LAYOUT_INPUT_BYTES + 1).read_to_string(&mut buffer)?;
     } else {
-        let metadata = fs::metadata(path)?;
-        if metadata.len() > MAX_LAYOUT_INPUT_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "layout IR exceeds 16 MiB input limit",
-            ));
-        }
-        fs::read_to_string(path)
+        fs::File::open(path)?.take(MAX_LAYOUT_INPUT_BYTES + 1)
+            .read_to_string(&mut buffer)?;
     }
+    if buffer.len() as u64 > MAX_LAYOUT_INPUT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "layout IR exceeds 16 MiB input limit",
+        ));
+    }
+    Ok(buffer)
 }
 
 fn main() -> ExitCode {
