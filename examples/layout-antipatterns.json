@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "evidence_complete": true,
+  "target": {
+    "cache_line_bytes": 64,
+    "vector_bytes": 32
+  },
+  "regions": [
+    {
+      "name": "scenario.whole_row_snapshot",
+      "scope": "runtime",
+      "layout": "soa",
+      "rows": 10000,
+      "field_bytes": [
+        4,
+        4,
+        4,
+        4,
+        8,
+        8,
+        8,
+        8
+      ],
+      "accessed_fields": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "dense_iteration": true,
+      "sequential_rows": true,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": true,
+      "iteration_independent": true,
+      "sparse_membership": false,
+      "independent_component_passes": false,
+      "concurrent_mutable_sharing": false
+    },
+    {
+      "name": "scenario.overwide_tiles",
+      "scope": "runtime",
+      "layout": "aosoa",
+      "rows": 10000,
+      "field_bytes": [
+        4,
+        4,
+        4,
+        4,
+        8,
+        8,
+        8,
+        8
+      ],
+      "accessed_fields": [
+        0,
+        1
+      ],
+      "dense_iteration": true,
+      "sequential_rows": true,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": false,
+      "iteration_independent": true,
+      "sparse_membership": false,
+      "independent_component_passes": false,
+      "concurrent_mutable_sharing": false,
+      "aosoa_tile_rows": 256
+    },
+    {
+      "name": "scenario.entity_components",
+      "scope": "runtime",
+      "layout": "archetype",
+      "rows": 10000,
+      "field_bytes": [
+        4,
+        4,
+        4,
+        4,
+        8,
+        8,
+        8,
+        8
+      ],
+      "accessed_fields": [
+        0,
+        1
+      ],
+      "dense_iteration": true,
+      "sequential_rows": true,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": false,
+      "iteration_independent": true,
+      "sparse_membership": false,
+      "independent_component_passes": false,
+      "concurrent_mutable_sharing": false,
+      "structural_changes_per_pass": 1500,
+      "stable_dense_membership": true
+    },
+    {
+      "name": "scenario.gather_query",
+      "scope": "runtime",
+      "layout": "soa",
+      "rows": 10000,
+      "field_bytes": [
+        4,
+        4,
+        4,
+        4,
+        8,
+        8,
+        8,
+        8
+      ],
+      "accessed_fields": [
+        0,
+        1,
+        5
+      ],
+      "dense_iteration": true,
+      "sequential_rows": false,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": false,
+      "iteration_independent": true,
+      "sparse_membership": false,
+      "independent_component_passes": false,
+      "concurrent_mutable_sharing": false,
+      "random_cross_column_gathers": true
+    }
+  ]
+}
