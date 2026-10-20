@@ -153,9 +153,13 @@ def main():
             fail("source hash was incorrectly promoted to producer attestation")
         if report.get("work_allocation_copy_bounds") != "unverified":
             fail("unknown resource bounds became a fabricated proof")
-        for summary in report.get("report", {}).get("functions", {}).values():
-            if any(summary.get(field) is not None for field in
-                   ("allocations_upper_bound", "operations_upper_bound")):
+        summaries = report.get("report", {}).get("functions", {})
+        if set(summaries) != {"__root__.main/0"}:
+            fail("Rust analyzer did not return the exact expected procedure")
+        for summary in summaries.values():
+            if any(summary.get(field, "missing") is not None for field in
+                   ("allocations_upper_bound", "copies_upper_bound",
+                    "operations_upper_bound")):
                 fail("numeric resource bounds unexpectedly became certified")
 
         for strict in ("soft", "hard"):
