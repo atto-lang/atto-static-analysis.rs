@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "tick",
+      "control_flow": "linear",
+      "max_uninterrupted_units": 4,
+      "allow_error_propagation": false,
+      "events": [
+        {"kind":"define","place":"actor_state"},
+        {"kind":"borrow","place":"actor_state","loan":"b1","mutable":true},
+        {"kind":"borrow","place":"actor_state","loan":"b2","mutable":false},
+        {"kind":"suspend"},
+        {"kind":"compute","units":12},
+        {"kind":"may_fail","error":"decode"},
+        {"kind":"lock","id":"A"},
+        {"kind":"wait","bounded":false}
+      ]
+    }
+  ]
+}
