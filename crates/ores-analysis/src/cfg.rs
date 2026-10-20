@@ -805,12 +805,14 @@ mod tests {
     #[test]
     fn different_branch_definitions_require_validated_phi() {
         let r = run(
-            &base(r#"[
+            &base(
+                r#"[
               {"id":"a","events":[{"kind":"define","place":"cond"}],"terminator":{"kind":"branch","condition":"cond","then_block":"b","else_block":"c"}},
               {"id":"b","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
               {"id":"c","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
               {"id":"d","events":[{"kind":"read","place":"x"}],"terminator":{"kind":"return"}}
-            ]"#),
+            ]"#,
+            ),
             SafetyProfile::General,
         );
         assert!(has(&r, "ORES-CFG103"), "{:?}", r.diagnostics);
@@ -819,12 +821,14 @@ mod tests {
     #[test]
     fn different_branch_definitions_are_not_reconciled_by_join_order() {
         let r = run(
-            &base(r#"[
+            &base(
+                r#"[
               {"id":"a","events":[{"kind":"define","place":"cond"}],"terminator":{"kind":"branch","condition":"cond","then_block":"z","else_block":"b"}},
               {"id":"z","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
               {"id":"b","events":[{"kind":"define","place":"x"}],"terminator":{"kind":"jump","target":"d"}},
               {"id":"d","events":[{"kind":"read","place":"x"}],"terminator":{"kind":"return"}}
-            ]"#),
+            ]"#,
+            ),
             SafetyProfile::General,
         );
         assert!(has(&r, "ORES-CFG103"), "{:?}", r.diagnostics);
