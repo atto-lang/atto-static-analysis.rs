@@ -53,3 +53,13 @@ is a cross-repo *fixture*, not an authenticated source or machine proof. The
 analyzer always reports `assurance_level=untrusted_effect_ir_model_only`, even
 when the hard profile returns exit zero. An independently verified bound and
 signed/provenanced producer attestation remain prerequisites for certification.
+
+### Scalar MIR-to-analyzer conformance
+
+The Rust scalar compiler exports one `compute(units=1)` per MIR expression
+node, checking the total 100,000-node analyzer budget before writing the
+artifact. It is compared byte-for-byte to the shared golden fixture with
+SHA-256 `8ee1adbf6faef704c1eb6d2b2075c3b2d723097037f646f9e6e518a69d005463`.
+The analyzer accepts this narrowly defined operation and conservatively
+counts units. The result stays tagged `untrusted_effect_ir_model_only`
+because mere conformance cannot authenticate a producer or certify WCET.
