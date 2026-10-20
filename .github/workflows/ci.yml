@@ -31,3 +31,12 @@ jobs:
           if cargo run --locked -p ores-analyze -- --safety examples/safety-invalid.json hard; then
             echo "Invalid MIR safety input unexpectedly passed"; exit 1
           fi
+      - name: CFG ownership diamonds (must accept and reject)
+        run: |
+          cargo run --locked -p ores-analyze -- --cfg examples/cfg-valid.json hard > target/cfg-valid-report.json
+          python3 -c 'import json; r=json.load(open("target/cfg-valid-report.json")); assert r["admitted_to_static_gate"] and not r["hard_realtime_certified"]'
+          if cargo run --locked -p ores-analyze -- --cfg examples/cfg-invalid.json hard > target/cfg-invalid-report.json; then
+            echo "Use-after-move across branch was incorrectly admitted"
+            exit 1
+          fi
+          grep -q "ORES-CFG111" target/cfg-invalid-report.json
