@@ -89,7 +89,8 @@ def producer_command(args, path):
             fail("Wasm requires --backend-compiler pointing to approved native LLVM compiler")
         return ["node", "scripts/static-facts-v0.mjs",
                 "--compiler=" + str(pathlib.Path(args.backend_compiler).resolve()),
-                "--source=" + src]
+                "--source=" + src,
+                "--compiler-sha256=" + args.backend_compiler_sha256]
     fail("unsupported backend")
 
 
