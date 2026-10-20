@@ -40,9 +40,7 @@ fn main() -> ExitCode {
             .read_to_string(&mut data)
     } else {
         match fs::File::open(path) {
-            Ok(file) => file
-                .take(MAX_INPUT_BYTES + 1)
-                .read_to_string(&mut data),
+            Ok(file) => file.take(MAX_INPUT_BYTES + 1).read_to_string(&mut data),
             Err(err) => Err(err),
         }
     };
