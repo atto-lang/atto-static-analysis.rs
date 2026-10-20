@@ -1,8 +1,8 @@
 //! Experimental CFG-sensitive ownership / actor-domain admission.
 //! This is a verifier of compiler-emitted MIR *claims*, not an independent proof
 //! that the compiler correctly modeled source semantics or hardware WCET.
-use serde::{Deserialize, Serialize};
 use crate::flow_calls::{compute_pure_summaries, PureSummaries};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -410,11 +410,15 @@ fn step(
                 Some(Ok(units)) => {
                     // A call is one abstract dispatch plus the entire validated
                     // transitive scalar body; it cannot reset cooperation state.
-                    state.since_checkpoint = state.since_checkpoint
+                    state.since_checkpoint = state
+                        .since_checkpoint
                         .and_then(|x| x.checked_add(*units))
                         .and_then(|x| x.checked_add(1));
                     if profile != FlowProfile::General && state.since_checkpoint.is_none() {
-                        err("ORES-FLOW300", format!("unbounded scalar call work: {target}"));
+                        err(
+                            "ORES-FLOW300",
+                            format!("unbounded scalar call work: {target}"),
+                        );
                     }
                     if profile != FlowProfile::General {
                         if let (Some(work), Some(max)) = (state.since_checkpoint, limit) {
@@ -426,7 +430,10 @@ fn step(
                     }
                 }
                 Some(Err(reason)) => {
-                    err("ORES-FLOW500", format!("call '{target}' rejected: {reason}"));
+                    err(
+                        "ORES-FLOW500",
+                        format!("call '{target}' rejected: {reason}"),
+                    );
                 }
                 None => {
                     err("ORES-FLOW500", format!("unresolved scalar call '{target}'"));
@@ -859,7 +866,8 @@ mod tests {
     }
     #[test]
     fn admits_only_checked_pure_scalar_forward_call() {
-        let p: FlowProgram = serde_json::from_str(r#"{
+        let p: FlowProgram = serde_json::from_str(
+            r#"{
           "schema_version":1,"effects_complete":true,
           "functions":[
             {"name":"main","entry":"b","max_uninterrupted_units":6,
@@ -869,7 +877,9 @@ mod tests {
              "blocks":[{"id":"b","ops":[{"kind":"declare","place":"a","domain":"local"},
               {"kind":"read","place":"a"},{"kind":"compute","units":3}],
               "terminator":{"kind":"return"}}]}
-          ]}"#).unwrap();
+          ]}"#,
+        )
+        .unwrap();
         assert!(analyze_flow(&p, FlowProfile::Hard).admitted_to_static_gate);
         let mut p = p;
         p.functions[0].max_uninterrupted_units = Some(5);
@@ -878,17 +888,23 @@ mod tests {
     }
     #[test]
     fn rejects_self_recursion_in_scalar_call_graph() {
-        let p: FlowProgram = serde_json::from_str(r#"{
+        let p: FlowProgram = serde_json::from_str(
+            r#"{
           "schema_version":1,"effects_complete":true,
           "functions":[{"name":"a","entry":"b","max_uninterrupted_units":6,
             "blocks":[{"id":"b","ops":[{"kind":"call","target":"a"}],
-               "terminator":{"kind":"return"}}]}]}"#).unwrap();
-        assert!(analyze_flow(&p, FlowProfile::Hard).diagnostics.iter()
+               "terminator":{"kind":"return"}}]}]}"#,
+        )
+        .unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Hard)
+            .diagnostics
+            .iter()
             .any(|d| d.code == "ORES-FLOW500"));
     }
     #[test]
     fn rejects_callee_with_unverified_actor_or_suspend_effects() {
-        let p: FlowProgram = serde_json::from_str(r#"{
+        let p: FlowProgram = serde_json::from_str(
+            r#"{
           "schema_version":1,"effects_complete":true,
           "functions":[
             {"name":"a","entry":"b","max_uninterrupted_units":6,
@@ -897,8 +913,12 @@ mod tests {
             {"name":"b","entry":"b","max_uninterrupted_units":6,
               "blocks":[{"id":"b","ops":[{"kind":"suspend"}],
                "terminator":{"kind":"return"}}]}
-          ]}"#).unwrap();
-        assert!(analyze_flow(&p, FlowProfile::Hard).diagnostics.iter()
+          ]}"#,
+        )
+        .unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Hard)
+            .diagnostics
+            .iter()
             .any(|d| d.code == "ORES-FLOW500"));
     }
     #[test]
