@@ -36,6 +36,8 @@ pub struct FactLoop {
     pub id: String,
     pub exit: String,
     pub safepoint: bool,
+    #[serde(default)]
+    pub location: Option<FactLocation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +49,26 @@ pub struct FactEdge {
     pub kind: String,
     pub fanout: u64,
     pub guard: String,
+    #[serde(default)]
+    pub enclosing_loop: Option<String>,
+    #[serde(default)]
+    pub location: Option<FactLocation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactLocation {
+    pub path: String,
+    pub line: u64,
+}
+
+impl FactLocation {
+    fn valid(&self) -> bool {
+        !self.path.is_empty()
+            && self.path.len() <= 512
+            && !self.path.chars().any(char::is_control)
+            && (1..=200_000_000).contains(&self.line)
+    }
 }
 
 fn identifier(id: &str) -> bool {
@@ -88,7 +110,10 @@ impl SharedFactsV0 {
             }
             let mut loops = HashSet::new();
             for l in &fact.loops {
-                if !identifier(&l.id) || !loops.insert(l.id.as_str()) {
+                if !identifier(&l.id)
+                    || !loops.insert(l.id.as_str())
+                    || l.location.as_ref().is_some_and(|location| !location.valid())
+                {
                     return Err("invalid or duplicated loop identity".into());
                 }
                 // The prototype AST exporter has neither ranking-function
@@ -114,6 +139,14 @@ impl SharedFactsV0 {
         }
         let mut seen_edges = HashSet::new();
         for e in &self.edges {
+            if e.location.as_ref().is_some_and(|location| !location.valid()) {
+                return Err("invalid source location metadata".into());
+            }
+            // A call nested in a loop may execute arbitrarily many times.
+            // Current flat call operations cannot model this multiplicity.
+            if e.enclosing_loop.is_some() {
+                return Err("loop-associated call needs verified enclosing-loop effects".into());
+            }
             if !seen_edges.insert((e.source.as_str(), e.to.as_str())) {
                 return Err("duplicate call edge is not a proof of repeated-call fanout".into());
             }
