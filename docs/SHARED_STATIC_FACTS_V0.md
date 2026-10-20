@@ -54,6 +54,56 @@ enforces the same limits, and rejects duplicate caller/callee callsites and
 calls inside loops, because the current v0 edge format does not preserve
 callsite multiplicity or enclosing-loop work effects.
 
+## Six-backend exact-commit integration gate
+
+The `scripts/verify-cross-backend-static-facts-v0.py` executable smoke requires
+**three locally authorized, already checked-out private repositories**, a real
+backend compiler, and a real Rust analyzer. It does not clone or mirror code,
+read GitHub tokens, trust an org carrier, or treat an absent runner as PASS.
+
+Install Python `jsonschema` (Draft 2020-12) in the runner environment and the
+backend's real toolchain. A reviewer must obtain the three expected 40-character
+commit SHAs independently before invoking the gate; **do not infer approval**
+from a script that substitutes today's checkout HEAD for those arguments:
+
+```sh
+python3 scripts/verify-cross-backend-static-facts-v0.py \\
+  --backend js \\
+  --producer-repo /authorized/oreslang-source.js \\
+  --analyzer-repo /authorized/oreslang-static-analysis.rs \\
+  --contract-repo /authorized/oreslang-common-source \\
+  --producer-head <reviewed-JS-commit> \\
+  --analyzer-head <reviewed-analyzer-commit> \\
+  --contract-head <reviewed-contract-commit>
+```
+
+The `--backend` choices are `js`, `rs`, `net`, `forge`, `llvm`,
+`wasm`. Forge, LLVM and Wasm require a **previously authorized local native
+compiler executable** (pass `--backend-compiler /absolute/path`). For LLVM
+and Forge the local CMake compiler can otherwise be selected from `build/`;
+Wasm always requires `--backend-compiler` because it runs the actual native
+LLVM→Clang→Wasm producer bridge. It does not manufacture missing compilers,
+simulate a toolchain, or fetch private source into another organization.
+
+A genuine PASS requires, in sequence: byte-for-byte committed source
+identity; the real compiler's emitted JSON; validation using the exact
+reviewed schema; canonical `main/0` with **no falsely invented effects**;
+the real Rust `general` report with `advisory_only=true`,
+`producer_authenticated=false`, and *all three* work/copy/allocation bounds
+`null`; both soft/hard profiles rejected with exit 2; unresolved-call source
+rejection; tampered source identity and invalid/replaced proof rejection; and
+an unproved synthetic loop yielding `ORES-SA104`. A rejected
+`enclosing_loop` call verifies that flat calls never erase multiplicity.
+
+This tests the one-function literal-only common intersection, not the
+non-scalar extensions. Each backend's richer actor/task/async/ownership
+lowering must be tested separately when representable in a typed shared IR.
+
+**No end-to-end PASS is claimed for a registered but unexecuted script.**
+The current source-org Actions jobs have returned zero steps and missing job
+logs. CI infrastructure recovery or a locally authorized exact-head toolchain
+is still required.
+
 ## Outstanding work
 
 - Build and test both exact source trees; current repo org Actions jobs have been failing before execution. The new Rust unit tests have not yet run on an allocated runner.
