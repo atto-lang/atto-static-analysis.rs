@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub const SCHEMA_VERSION: u32 = 1;
 /// Resource ceilings for untrusted effect-IR producers.
 pub const MAX_IR_BYTES: usize = 8 * 1024 * 1024;
+/// A structurally valid JSON model is NEVER proof of trusted source semantics.
+pub const ASSURANCE_LEVEL: &str = "untrusted_effect_ir_model_only";
 const MAX_FUNCTIONS: usize = 4096;
 const MAX_OPERATIONS: usize = 100_000;
 const MAX_NESTING: usize = 64;
@@ -131,6 +133,7 @@ pub struct Diagnostic {
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     pub schema_version: u32,
+    pub assurance_level: &'static str,
     pub diagnostics: Vec<Diagnostic>,
     pub functions: BTreeMap<String, Summary>,
 }
@@ -263,17 +266,20 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
     // Explicit iterative preflight prevents recursive traversal of hostile IR.
     if program.functions.is_empty() {
         engine.emit("ORES-SA003", Severity::Error, "<module>", "effect IR contains no functions");
-        return Report { schema_version: SCHEMA_VERSION, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+        return Report { schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
     }
     if program.functions.len() > MAX_FUNCTIONS {
         engine.emit("ORES-SA003", Severity::Error, "<module>", "function count exceeds budget");
-        return Report { schema_version: SCHEMA_VERSION, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+        return Report { schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
     }
     let mut count = 0usize;
     for function in &program.functions {
         if function.name.len() > 256 {
             engine.emit("ORES-SA003", Severity::Error, "<module>", "function symbol exceeds budget");
-            return Report { schema_version: SCHEMA_VERSION, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+            return Report { schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
         }
         let mut pending: Vec<(&Operation, usize)> =
             function.operations.iter().map(|op| (op, 1)).collect();
@@ -281,7 +287,8 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
             count += 1;
             if count > MAX_OPERATIONS || depth > MAX_NESTING {
                 engine.emit("ORES-SA004", Severity::Error, "<module>", "effect graph exceeds depth/size budget");
-                return Report { schema_version: SCHEMA_VERSION, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                return Report { schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
             }
             if let Operation::Loop { operations, .. } = op {
                 pending.extend(operations.iter().map(|child| (child, depth + 1)));
@@ -289,7 +296,8 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
             if let Operation::Call { target } = op {
                 if target.len() > 256 {
                     engine.emit("ORES-SA003", Severity::Error, "<module>", "call target exceeds budget");
-                    return Report { schema_version: SCHEMA_VERSION, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                    return Report { schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
                 }
             }
         }
@@ -384,6 +392,7 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
     });
     Report {
         schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL,
         diagnostics: engine.diagnostics,
         functions: summaries,
     }
@@ -400,6 +409,25 @@ mod tests {
                 operations,
             }],
         }
+    }
+    #[test]
+    fn accepted_hard_profile_remains_untrusted_model_only() {
+        let report = analyze(&sample(vec![]), Profile::HardRealtime);
+        assert!(!report.has_errors());
+        assert_eq!(report.assurance_level, ASSURANCE_LEVEL);
+        assert_ne!(report.assurance_level, "certified_hard_realtime");
+    }
+    #[test]
+    fn scalar_compiler_v1_fixture_is_valid_and_still_advisory() {
+        let p: Program = serde_json::from_str(
+            include_str!("../../../examples/rust-scalar-expected.json")
+        ).unwrap();
+        assert_eq!(p.functions.len(), 1);
+        assert_eq!(p.functions[0].name, "answer");
+        assert!(p.functions[0].operations.is_empty());
+        let report = analyze(&p, Profile::HardRealtime);
+        assert!(!report.has_errors());
+        assert_eq!(report.assurance_level, ASSURANCE_LEVEL);
     }
     #[test]
     fn rejects_omitted_effect_list() {
