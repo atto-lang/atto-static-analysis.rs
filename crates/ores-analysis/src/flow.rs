@@ -89,7 +89,10 @@ pub enum FlowOp {
     Suspend,
     /// Only compiler-proven *exact* constant-trip repeats are admitted.
     /// Dynamic and maximum-only bounds are not represented by this variant.
-    Repeat { iterations: u16, operations: Vec<FlowOp> },
+    Repeat {
+        iterations: u16,
+        operations: Vec<FlowOp>,
+    },
     /// Interprocedural summaries are only proven for pure scalar callees.
     Call {
         target: String,
@@ -141,7 +144,10 @@ fn expand_ops<'a>(
     }
     for op in ops {
         match op {
-            FlowOp::Repeat { iterations, operations } => {
+            FlowOp::Repeat {
+                iterations,
+                operations,
+            } => {
                 if *iterations > MAX_REPEAT_TRIPS {
                     return Err("unverified or excessive repeat trip count");
                 }
@@ -444,7 +450,10 @@ fn step(
             state.since_checkpoint = Some(0);
         }
         FlowOp::Repeat { .. } => {
-            err("ORES-FLOW010", "repeat must be expanded before transfer checking".into());
+            err(
+                "ORES-FLOW010",
+                "repeat must be expanded before transfer checking".into(),
+            );
         }
         FlowOp::Call { target } => {
             match summaries.get(target) {
@@ -669,7 +678,14 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
             let block = by_id[id];
             let mut expanded = Vec::new();
             if let Err(reason) = expand_ops(&block.ops, 0, &mut expanded) {
-                error(&mut diagnostics, "ORES-FLOW010", &function.name, id, None, reason);
+                error(
+                    &mut diagnostics,
+                    "ORES-FLOW010",
+                    &function.name,
+                    id,
+                    None,
+                    reason,
+                );
                 continue;
             }
             for (index, op) in expanded.iter().enumerate() {
@@ -981,10 +997,14 @@ mod tests {
         );
         // Two branches have work of at most three units; repeat adds six.
         let p: FlowProgram = serde_json::from_str(&src).unwrap();
-        assert!(analyze_flow(&p, FlowProfile::Hard).diagnostics.iter()
+        assert!(analyze_flow(&p, FlowProfile::Hard)
+            .diagnostics
+            .iter()
             .any(|d| d.code == "ORES-FLOW301"));
-        let admitted = src.replace(r#""max_uninterrupted_units":4"#,
-            r#""max_uninterrupted_units":10"#);
+        let admitted = src.replace(
+            r#""max_uninterrupted_units":4"#,
+            r#""max_uninterrupted_units":10"#,
+        );
         assert!(run(&admitted).admitted_to_static_gate);
     }
     #[test]
@@ -993,7 +1013,10 @@ mod tests {
             r#""kind":"read","place":"x""#,
             r#""kind":"repeat","iterations":2,"operations":[{"kind":"move","place":"x"}]"#,
         );
-        assert!(run(&src).diagnostics.iter().any(|d| d.code == "ORES-FLOW103"));
+        assert!(run(&src)
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-FLOW103"));
     }
     #[test]
     fn rejects_excessive_trip_count_before_expansion() {
@@ -1001,7 +1024,10 @@ mod tests {
             r#""kind":"read","place":"x""#,
             r#""kind":"repeat","iterations":65,"operations":[{"kind":"compute","units":1}]"#,
         );
-        assert!(run(&src).diagnostics.iter().any(|d| d.code == "ORES-FLOW009"));
+        assert!(run(&src)
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-FLOW009"));
     }
     #[test]
     fn zero_iteration_repeat_has_no_runtime_effects() {
