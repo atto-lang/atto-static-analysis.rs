@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "evidence_complete": true,
+  "target": {
+    "cache_line_bytes": 64,
+    "vector_bytes": 32
+  },
+  "regions": [
+    {
+      "name": "physics.positions",
+      "scope": "userland",
+      "layout": "aos",
+      "rows": 10000,
+      "field_bytes": [4, 4, 4, 4, 8, 8, 8, 8],
+      "accessed_fields": [0, 1],
+      "dense_iteration": true,
+      "sequential_rows": true,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": false,
+      "iteration_independent": true,
+      "sparse_membership": false,
+      "independent_component_passes": false,
+      "concurrent_mutable_sharing": false
+    },
+    {
+      "name": "runtime.scheduler_worker_stats",
+      "scope": "runtime",
+      "layout": "soa",
+      "rows": 256,
+      "field_bytes": [8, 8, 8, 8, 8, 8],
+      "accessed_fields": [0, 1, 2, 3],
+      "dense_iteration": true,
+      "sequential_rows": true,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": false,
+      "iteration_independent": true,
+      "sparse_membership": false,
+      "independent_component_passes": false,
+      "concurrent_mutable_sharing": true
+    },
+    {
+      "name": "game.entities",
+      "scope": "userland",
+      "layout": "aos",
+      "rows": 50000,
+      "field_bytes": [8, 4, 4, 4, 4, 8],
+      "accessed_fields": [1, 2],
+      "dense_iteration": false,
+      "sequential_rows": true,
+      "hot": true,
+      "relocation_verified": true,
+      "stable_address_required": false,
+      "whole_record_access": false,
+      "iteration_independent": true,
+      "sparse_membership": true,
+      "independent_component_passes": true,
+      "concurrent_mutable_sharing": false
+    }
+  ]
+}

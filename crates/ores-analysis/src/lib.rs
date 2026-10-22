@@ -1,6 +1,9 @@
 //! Prototype, versioned MIR-effect static analyzer for all Oreslang frontends.
 //! Conservative on absent bounds and unresolvable callees. No proof of WCET.
+pub mod cfg;
+pub mod layout;
 pub mod safety;
+pub mod shared_facts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -173,8 +176,16 @@ impl Engine<'_> {
             return found.clone();
         }
         if self.active.len() >= MAX_CALL_DEPTH {
-            self.emit("ORES-SA105", Severity::Error, name, "call depth budget exceeded");
-            return Summary { unresolved_control_flow: true, ..Summary::default() };
+            self.emit(
+                "ORES-SA105",
+                Severity::Error,
+                name,
+                "call depth budget exceeded",
+            );
+            return Summary {
+                unresolved_control_flow: true,
+                ..Summary::default()
+            };
         }
         // Cycles require separately verified recursion bounds and stack limits;
         // intentionally reject instead of assuming a finite upper bound.
@@ -238,15 +249,22 @@ impl Engine<'_> {
                     let callee = self.function(target);
                     effect.add_assign(&callee);
                 }
-                Operation::Loop { iterations, operations } => {
+                Operation::Loop {
+                    iterations,
+                    operations,
+                } => {
                     // Zero-trip loops cannot execute body effects or unknown calls.
                     if *iterations != Some(0) {
                         let body = self.operations(owner, operations);
                         effect.add_assign(&body.scale(*iterations));
                         if iterations.is_none() {
                             effect.operations_upper_bound = None;
-                            self.emit("ORES-SA104", Severity::Warning,
-                                owner, "loop iteration limit is absent");
+                            self.emit(
+                                "ORES-SA104",
+                                Severity::Warning,
+                                owner,
+                                "loop iteration limit is absent",
+                            );
                         }
                     }
                 }
@@ -270,25 +288,51 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
     };
     // Iterative whole-graph preflight before recursive evaluation.
     if program.functions.is_empty() || program.functions.len() > MAX_FUNCTIONS {
-        engine.emit("ORES-SA003", Severity::Error, "<module>", "function count outside budget");
-        return Report { schema_version: SCHEMA_VERSION, assurance_level: ASSURANCE_LEVEL,
-            diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+        engine.emit(
+            "ORES-SA003",
+            Severity::Error,
+            "<module>",
+            "function count outside budget",
+        );
+        return Report {
+            schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL,
+            diagnostics: engine.diagnostics,
+            functions: BTreeMap::new(),
+        };
     }
     let mut count = 0usize;
     for function in &program.functions {
         if function.name.len() > 256 {
-            engine.emit("ORES-SA003", Severity::Error, "<module>", "function symbol too long");
-            return Report { schema_version: SCHEMA_VERSION, assurance_level: ASSURANCE_LEVEL,
-                diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+            engine.emit(
+                "ORES-SA003",
+                Severity::Error,
+                "<module>",
+                "function symbol too long",
+            );
+            return Report {
+                schema_version: SCHEMA_VERSION,
+                assurance_level: ASSURANCE_LEVEL,
+                diagnostics: engine.diagnostics,
+                functions: BTreeMap::new(),
+            };
         }
         let mut pending: Vec<(&Operation, usize)> =
             function.operations.iter().map(|op| (op, 1)).collect();
         while let Some((op, depth)) = pending.pop() {
             if count >= MAX_OPERATIONS || depth > MAX_NESTING {
-                engine.emit("ORES-SA004", Severity::Error,
-                    "<module>", "effect graph exceeds node/depth budget");
-                return Report { schema_version: SCHEMA_VERSION, assurance_level: ASSURANCE_LEVEL,
-                    diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                engine.emit(
+                    "ORES-SA004",
+                    Severity::Error,
+                    "<module>",
+                    "effect graph exceeds node/depth budget",
+                );
+                return Report {
+                    schema_version: SCHEMA_VERSION,
+                    assurance_level: ASSURANCE_LEVEL,
+                    diagnostics: engine.diagnostics,
+                    functions: BTreeMap::new(),
+                };
             }
             count += 1;
             if let Operation::Loop { operations, .. } = op {
@@ -296,16 +340,33 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
             }
             if let Operation::Call { target } = op {
                 if target.len() > 256 {
-                    engine.emit("ORES-SA003", Severity::Error, "<module>", "callee name too long");
-                    return Report { schema_version: SCHEMA_VERSION, assurance_level: ASSURANCE_LEVEL,
-                        diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                    engine.emit(
+                        "ORES-SA003",
+                        Severity::Error,
+                        "<module>",
+                        "callee name too long",
+                    );
+                    return Report {
+                        schema_version: SCHEMA_VERSION,
+                        assurance_level: ASSURANCE_LEVEL,
+                        diagnostics: engine.diagnostics,
+                        functions: BTreeMap::new(),
+                    };
                 }
             }
             if let Operation::Compute { units: Some(0) } = op {
-                engine.emit("ORES-SA005", Severity::Error,
-                    "<module>", "zero-cost compute cannot attest actual work");
-                return Report { schema_version: SCHEMA_VERSION, assurance_level: ASSURANCE_LEVEL,
-                    diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                engine.emit(
+                    "ORES-SA005",
+                    Severity::Error,
+                    "<module>",
+                    "zero-cost compute cannot attest actual work",
+                );
+                return Report {
+                    schema_version: SCHEMA_VERSION,
+                    assurance_level: ASSURANCE_LEVEL,
+                    diagnostics: engine.diagnostics,
+                    functions: BTreeMap::new(),
+                };
             }
         }
     }
@@ -356,8 +417,12 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
                 );
             }
             if summary.may_suspend {
-                engine.emit("ORES-SA305", severity, &function.name,
-                    "suspension completion/timing bound is unproven");
+                engine.emit(
+                    "ORES-SA305",
+                    severity,
+                    &function.name,
+                    "suspension completion/timing bound is unproven",
+                );
             }
             if summary.may_use_unsafe_ffi {
                 engine.emit(
@@ -424,15 +489,23 @@ mod tests {
     }
     #[test]
     fn zero_compute_is_not_valid_analysis_evidence() {
-        let r = analyze(&sample(vec![Operation::Compute { units: Some(0) }]), Profile::General);
+        let r = analyze(
+            &sample(vec![Operation::Compute { units: Some(0) }]),
+            Profile::General,
+        );
         assert!(r.diagnostics.iter().any(|d| d.code == "ORES-SA005"));
     }
     #[test]
     fn unreachable_loop_does_not_report_missing_callee() {
-        let r = analyze(&sample(vec![Operation::Loop {
-            iterations: Some(0),
-            operations: vec![Operation::Call { target: "unknown".into() }],
-        }]), Profile::HardRealtime);
+        let r = analyze(
+            &sample(vec![Operation::Loop {
+                iterations: Some(0),
+                operations: vec![Operation::Call {
+                    target: "unknown".into(),
+                }],
+            }]),
+            Profile::HardRealtime,
+        );
         assert!(!r.has_errors());
     }
     #[test]
