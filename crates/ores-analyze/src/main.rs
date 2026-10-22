@@ -125,7 +125,11 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
-            return if failed { ExitCode::from(1) } else { ExitCode::SUCCESS };
+            return if failed {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            };
         }
     }
 

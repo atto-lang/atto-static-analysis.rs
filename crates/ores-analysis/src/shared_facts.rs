@@ -83,17 +83,25 @@ impl SharedFactsV0 {
         }
         if self.unit.len() != 71
             || !self.unit.starts_with("sha256:")
-            || !self.unit[7..].bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            || !self.unit[7..]
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
-            return Err("unverified or malformed source identity; expected sha256:<64 lowercase hex>".into());
+            return Err(
+                "unverified or malformed source identity; expected sha256:<64 lowercase hex>"
+                    .into(),
+            );
         }
         // Bound importer graph size below the recursive reference engine's
         // stack-sensitive call traversal until iterative SCC lowering exists.
         if self.procedures.is_empty() || self.procedures.len() > 512 || self.edges.len() > 8_192 {
             return Err("invalid static facts collection size".into());
         }
-        if !self.taint_sources.is_empty() || !self.flows.is_empty() || !self.sinks.is_empty()
-            || !self.permission_checks.is_empty() || !self.callback_orderings.is_empty()
+        if !self.taint_sources.is_empty()
+            || !self.flows.is_empty()
+            || !self.sinks.is_empty()
+            || !self.permission_checks.is_empty()
+            || !self.callback_orderings.is_empty()
         {
             return Err("security/callback facts are not admitted by scalar importer".into());
         }
@@ -112,7 +120,9 @@ impl SharedFactsV0 {
             for l in &fact.loops {
                 if !identifier(&l.id)
                     || !loops.insert(l.id.as_str())
-                    || l.location.as_ref().is_some_and(|location| !location.valid())
+                    || l.location
+                        .as_ref()
+                        .is_some_and(|location| !location.valid())
                 {
                     return Err("invalid or duplicated loop identity".into());
                 }
@@ -135,11 +145,17 @@ impl SharedFactsV0 {
                     operations: vec![Operation::Compute { units: None }],
                 });
             }
-            functions.push(Function { name: fact.id.clone(), operations });
+            functions.push(Function {
+                name: fact.id.clone(),
+                operations,
+            });
         }
         let mut seen_edges = HashSet::new();
         for e in &self.edges {
-            if e.location.as_ref().is_some_and(|location| !location.valid()) {
+            if e.location
+                .as_ref()
+                .is_some_and(|location| !location.valid())
+            {
                 return Err("invalid source location metadata".into());
             }
             // A call nested in a loop may execute arbitrarily many times.
@@ -159,9 +175,14 @@ impl SharedFactsV0 {
             if !index.contains_key(e.to.as_str()) {
                 return Err("unresolved callee (cannot certify direct dispatch)".into());
             }
-            functions[source_index].operations.push(Operation::Call { target: e.to.clone() });
+            functions[source_index].operations.push(Operation::Call {
+                target: e.to.clone(),
+            });
         }
-        Ok(Program { schema_version: SCHEMA_VERSION, functions })
+        Ok(Program {
+            schema_version: SCHEMA_VERSION,
+            functions,
+        })
     }
 }
 
@@ -187,15 +208,27 @@ mod tests {
         let ir = facts.advisory_effect_ir().unwrap();
         let report = crate::analyze(&ir, crate::Profile::General);
         assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SA102"));
-        assert_eq!(report.functions["__root__.main/0"].operations_upper_bound, None);
-        assert_eq!(report.functions["__root__.main/0"].allocations_upper_bound, None);
+        assert_eq!(
+            report.functions["__root__.main/0"].operations_upper_bound,
+            None
+        );
+        assert_eq!(
+            report.functions["__root__.main/0"].allocations_upper_bound,
+            None
+        );
     }
 
     #[test]
     fn loop_never_becomes_proved_finite() {
-        let source = GOOD.replace("\"loops\":[]", "\"loops\":[{\"id\":\"L1\",\"exit\":\"unknown\",\"safepoint\":false}]");
+        let source = GOOD.replace(
+            "\"loops\":[]",
+            "\"loops\":[{\"id\":\"L1\",\"exit\":\"unknown\",\"safepoint\":false}]",
+        );
         let facts: SharedFactsV0 = serde_json::from_str(&source).unwrap();
-        let report = crate::analyze(&facts.advisory_effect_ir().unwrap(), crate::Profile::General);
+        let report = crate::analyze(
+            &facts.advisory_effect_ir().unwrap(),
+            crate::Profile::General,
+        );
         assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SA104"));
     }
 
@@ -204,13 +237,21 @@ mod tests {
         for text in [
             GOOD.replace("\"guard\":\"unproved\"", "\"guard\":\"proved_bounded\""),
             GOOD.replace("\"kind\":\"call\"", "\"kind\":\"actor_spawn\""),
-            GOOD.replace("\"taint_sources\":[]", "\"taint_sources\":[{\"id\":\"secret\",\"class\":\"secret\"}]"),
-            GOOD.replace("\"loops\":[]", "\"loops\":[{\"id\":\"L1\",\"exit\":\"proved_terminates\",\"safepoint\":false}]"),
-            GOOD.replace("\"version\":\"ores-static-facts/v0\"", "\"version\":\"untrusted\""),
+            GOOD.replace(
+                "\"taint_sources\":[]",
+                "\"taint_sources\":[{\"id\":\"secret\",\"class\":\"secret\"}]",
+            ),
+            GOOD.replace(
+                "\"loops\":[]",
+                "\"loops\":[{\"id\":\"L1\",\"exit\":\"proved_terminates\",\"safepoint\":false}]",
+            ),
+            GOOD.replace(
+                "\"version\":\"ores-static-facts/v0\"",
+                "\"version\":\"untrusted\"",
+            ),
         ] {
-            match serde_json::from_str::<SharedFactsV0>(&text) {
-                Ok(doc) => assert!(doc.advisory_effect_ir().is_err()),
-                Err(_) => {}
+            if let Ok(doc) = serde_json::from_str::<SharedFactsV0>(&text) {
+                assert!(doc.advisory_effect_ir().is_err());
             }
         }
     }
@@ -235,9 +276,13 @@ mod tests {
     fn oversized_loop_facts_are_rejected_before_ir_allocation() {
         let mut doc: serde_json::Value = serde_json::from_str(GOOD).unwrap();
         doc["procedures"][0]["loops"] = serde_json::Value::Array(
-            (0..257).map(|i| serde_json::json!({
-                "id": format!("L{i}"), "exit":"unknown", "safepoint":false
-            })).collect()
+            (0..257)
+                .map(|i| {
+                    serde_json::json!({
+                        "id": format!("L{i}"), "exit":"unknown", "safepoint":false
+                    })
+                })
+                .collect(),
         );
         let facts: SharedFactsV0 = serde_json::from_value(doc).unwrap();
         assert!(facts.advisory_effect_ir().is_err());
@@ -247,8 +292,8 @@ mod tests {
     fn schema_optional_locations_are_validated_but_not_considered_proofs() {
         let text = GOOD
             .replace(
-                "\"safepoint\":false",
-                "\"safepoint\":false,\"location\":{\"path\":\"src/a.ores\",\"line\":3}",
+                "\"loops\":[]",
+                "\"loops\":[{\"id\":\"L1\",\"exit\":\"unknown\",\"safepoint\":false,\"location\":{\"path\":\"src/a.ores\",\"line\":3}}]",
             )
             .replace(
                 "\"guard\":\"unproved\"",
