@@ -1,6 +1,7 @@
 use ores_analysis::{
     analyze,
     cfg::{analyze_cfg, CfgProgram},
+    flow::{analyze_flow, FlowProfile, FlowProgram},
     layout::{analyze_layout, LayoutProgram},
     safety::{analyze_safety, SafetyProfile, SafetyProgram},
     shared_facts::SharedFactsV0,
@@ -86,6 +87,60 @@ fn read_layout_input(path: &str) -> io::Result<String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    if let [_, flag, path, mode] = args.as_slice() {
+        if flag == "--flow" {
+            let profile = match mode.as_str() {
+                "general" => FlowProfile::General,
+                "soft" => FlowProfile::Soft,
+                "hard" => FlowProfile::Hard,
+                _ => {
+                    eprintln!("invalid flow profile");
+                    return ExitCode::from(2);
+                }
+            };
+            let input: Box<dyn Read> = if path == "-" {
+                Box::new(io::stdin())
+            } else {
+                match fs::File::open(path) {
+                    Ok(file) => Box::new(file),
+                    Err(error) => {
+                        eprintln!("cannot read flow IR: {error}");
+                        return ExitCode::from(2);
+                    }
+                }
+            };
+            let mut data = String::new();
+            if let Err(error) = input.take(4 * 1024 * 1024 + 1).read_to_string(&mut data) {
+                eprintln!("cannot read flow IR: {error}");
+                return ExitCode::from(2);
+            }
+            if data.len() > 4 * 1024 * 1024 {
+                eprintln!("flow IR exceeds 4 MiB limit");
+                return ExitCode::from(2);
+            }
+            let program: FlowProgram = match serde_json::from_str(&data) {
+                Ok(program) => program,
+                Err(error) => {
+                    eprintln!("invalid flow IR: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let report = analyze_flow(&program, profile);
+            match serde_json::to_string_pretty(&report) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("cannot serialize flow report: {error}");
+                    return ExitCode::from(2);
+                }
+            }
+            return if report.admitted_to_static_gate {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            };
+        }
+    }
 
     // Restricted Java/Graal typed-AST scalar facts: advisory reporting only.
     // Do not treat a self-declared SHA-256 in JSON as trusted compiler proof.

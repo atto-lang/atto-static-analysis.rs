@@ -1,6 +1,7 @@
 //! Prototype, versioned MIR-effect static analyzer for all Oreslang frontends.
 //! Conservative on absent bounds and unresolvable callees. No proof of WCET.
 pub mod cfg;
+pub mod flow;
 pub mod layout;
 pub mod safety;
 pub mod shared_facts;

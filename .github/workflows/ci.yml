@@ -17,6 +17,7 @@ jobs:
         run: python3 -m py_compile scripts/verify-cross-backend-static-facts-v0.py
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --workspace --all-targets
+      - run: cargo run --locked -p ores-analyze -- --flow examples/flow-scalar-from-rust.json hard
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo run --locked -p ores-analyze -- examples/hard-realtime.json hard
       - name: Verify forward-call IR from Rust compiler
