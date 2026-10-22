@@ -3,6 +3,7 @@
 pub mod cfg;
 pub mod layout;
 pub mod safety;
+pub mod shared_facts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
