@@ -4,7 +4,7 @@ use ores_analysis::{
     layout::{analyze_layout, LayoutProgram},
     safety::{analyze_safety, SafetyProfile, SafetyProgram},
     shared_facts::SharedFactsV0,
-    Profile, Program,
+    Profile, Program, MAX_IR_BYTES,
 };
 use std::{
     env, fs,
@@ -41,14 +41,22 @@ fn read_cfg_input(path: &str) -> io::Result<String> {
     }
 }
 
-fn read_input(path: &str) -> io::Result<String> {
-    if path == "-" {
-        let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer)?;
-        Ok(buffer)
+fn read_bounded_ir(path: &str) -> io::Result<String> {
+    let reader: Box<dyn Read> = if path == "-" {
+        Box::new(io::stdin())
     } else {
-        fs::read_to_string(path)
+        Box::new(fs::File::open(path)?)
+    };
+    let mut bounded = reader.take(MAX_IR_BYTES as u64 + 1);
+    let mut source = String::new();
+    bounded.read_to_string(&mut source)?;
+    if source.len() > MAX_IR_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "effect/safety IR exceeds 8 MiB input budget",
+        ));
     }
+    Ok(source)
 }
 
 fn read_layout_input(path: &str) -> io::Result<String> {
@@ -225,7 +233,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let data = match read_input(path) {
+    let data = match read_bounded_ir(path) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("cannot read input: {err}");
