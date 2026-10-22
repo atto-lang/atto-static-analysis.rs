@@ -2,6 +2,7 @@
 //! Conservative on absent bounds and unresolvable callees. No proof of WCET.
 pub mod cfg;
 pub mod flow;
+mod flow_calls;
 pub mod layout;
 pub mod safety;
 pub mod shared_facts;

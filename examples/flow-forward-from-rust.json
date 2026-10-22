@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "main",
+      "entry": "entry",
+      "max_uninterrupted_units": 6,
+      "blocks": [
+        {
+          "id": "entry",
+          "ops": [
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "call",
+              "target": "times"
+            }
+          ],
+          "terminator": {
+            "kind": "return"
+          }
+        }
+      ]
+    },
+    {
+      "name": "times",
+      "entry": "entry",
+      "max_uninterrupted_units": 6,
+      "blocks": [
+        {
+          "id": "entry",
+          "ops": [
+            {
+              "kind": "declare",
+              "place": "a",
+              "domain": "local"
+            },
+            {
+              "kind": "declare",
+              "place": "b",
+              "domain": "local"
+            },
+            {
+              "kind": "read",
+              "place": "a"
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "read",
+              "place": "b"
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            },
+            {
+              "kind": "compute",
+              "units": 1
+            }
+          ],
+          "terminator": {
+            "kind": "return"
+          }
+        }
+      ]
+    }
+  ]
+}

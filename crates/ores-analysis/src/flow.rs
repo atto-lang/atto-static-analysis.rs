@@ -1,6 +1,7 @@
 //! Experimental CFG-sensitive ownership / actor-domain admission.
 //! This is a verifier of compiler-emitted MIR *claims*, not an independent proof
 //! that the compiler correctly modeled source semantics or hardware WCET.
+use crate::flow_calls::{compute_pure_summaries, PureSummaries};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
@@ -225,6 +226,7 @@ fn step(
     limit: Option<u64>,
     diagnostics: &mut Vec<FlowDiagnostic>,
     site: StepSite<'_>,
+    summaries: &PureSummaries,
 ) {
     let function = site.function;
     let block = site.block;
@@ -404,12 +406,39 @@ fn step(
             state.since_checkpoint = Some(0);
         }
         FlowOp::Call { target } => {
-            err(
-                "ORES-FLOW500",
-                format!(
-                    "call '{target}' lacks integrated interprocedural ownership/effect summary"
-                ),
-            );
+            match summaries.get(target) {
+                Some(Ok(units)) => {
+                    // A call is one abstract dispatch plus the entire validated
+                    // transitive scalar body; it cannot reset cooperation state.
+                    state.since_checkpoint = state
+                        .since_checkpoint
+                        .and_then(|x| x.checked_add(*units))
+                        .and_then(|x| x.checked_add(1));
+                    if profile != FlowProfile::General && state.since_checkpoint.is_none() {
+                        err(
+                            "ORES-FLOW300",
+                            format!("unbounded scalar call work: {target}"),
+                        );
+                    }
+                    if profile != FlowProfile::General {
+                        if let (Some(work), Some(max)) = (state.since_checkpoint, limit) {
+                            if work > max {
+                                err("ORES-FLOW301",
+                                    format!("uninterrupted call work {work} exceeds {max} abstract units"));
+                            }
+                        }
+                    }
+                }
+                Some(Err(reason)) => {
+                    err(
+                        "ORES-FLOW500",
+                        format!("call '{target}' rejected: {reason}"),
+                    );
+                }
+                None => {
+                    err("ORES-FLOW500", format!("unresolved scalar call '{target}'"));
+                }
+            }
         }
     }
 }
@@ -463,6 +492,9 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
             diagnostics,
         };
     }
+    // Memoized call graph analysis is independent of the CFG ownership pass.
+    // Only straight-line, local scalar callees receive finite summaries.
+    let pure_summaries = compute_pure_summaries(&program.functions);
     let mut seen_functions = HashSet::new();
     for function in &program.functions {
         if function.name.trim().is_empty() || !seen_functions.insert(&function.name) {
@@ -600,6 +632,7 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
                         block: id,
                         index,
                     },
+                    &pure_summaries,
                 );
             }
             if matches!(block.terminator, Terminator::Return)
@@ -830,6 +863,63 @@ mod tests {
         let report = analyze_flow(&p, FlowProfile::Hard);
         assert!(!report.admitted_to_static_gate);
         assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW009"));
+    }
+    #[test]
+    fn admits_only_checked_pure_scalar_forward_call() {
+        let p: FlowProgram = serde_json::from_str(
+            r#"{
+          "schema_version":1,"effects_complete":true,
+          "functions":[
+            {"name":"main","entry":"b","max_uninterrupted_units":6,
+             "blocks":[{"id":"b","ops":[{"kind":"compute","units":2},
+              {"kind":"call","target":"times"}],"terminator":{"kind":"return"}}]},
+            {"name":"times","entry":"b","max_uninterrupted_units":6,
+             "blocks":[{"id":"b","ops":[{"kind":"declare","place":"a","domain":"local"},
+              {"kind":"read","place":"a"},{"kind":"compute","units":3}],
+              "terminator":{"kind":"return"}}]}
+          ]}"#,
+        )
+        .unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Hard).admitted_to_static_gate);
+        let mut p = p;
+        p.functions[0].max_uninterrupted_units = Some(5);
+        let report = analyze_flow(&p, FlowProfile::Hard);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW301"));
+    }
+    #[test]
+    fn rejects_self_recursion_in_scalar_call_graph() {
+        let p: FlowProgram = serde_json::from_str(
+            r#"{
+          "schema_version":1,"effects_complete":true,
+          "functions":[{"name":"a","entry":"b","max_uninterrupted_units":6,
+            "blocks":[{"id":"b","ops":[{"kind":"call","target":"a"}],
+               "terminator":{"kind":"return"}}]}]}"#,
+        )
+        .unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Hard)
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-FLOW500"));
+    }
+    #[test]
+    fn rejects_callee_with_unverified_actor_or_suspend_effects() {
+        let p: FlowProgram = serde_json::from_str(
+            r#"{
+          "schema_version":1,"effects_complete":true,
+          "functions":[
+            {"name":"a","entry":"b","max_uninterrupted_units":6,
+              "blocks":[{"id":"b","ops":[{"kind":"call","target":"b"}],
+               "terminator":{"kind":"return"}}]},
+            {"name":"b","entry":"b","max_uninterrupted_units":6,
+              "blocks":[{"id":"b","ops":[{"kind":"suspend"}],
+               "terminator":{"kind":"return"}}]}
+          ]}"#,
+        )
+        .unwrap();
+        assert!(analyze_flow(&p, FlowProfile::Hard)
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-FLOW500"));
     }
     #[test]
     fn incomplete_calls_are_never_admitted() {
