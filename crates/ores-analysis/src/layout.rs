@@ -100,7 +100,12 @@ pub enum Scope {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SourceLanguage { Oreslang, Rust, Java, Cpp }
+pub enum SourceLanguage {
+    Oreslang,
+    Rust,
+    Java,
+    Cpp,
+}
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -278,9 +283,11 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
 
     let mut names = HashSet::new();
     for region in &program.regions {
-        if region.source_file.as_ref().is_some_and(|v| {
-            v.is_empty() || v.len() > 1024 || v.chars().any(char::is_control)
-        }) || region.source_line == Some(0)
+        if region
+            .source_file
+            .as_ref()
+            .is_some_and(|v| v.is_empty() || v.len() > 1024 || v.chars().any(char::is_control))
+            || region.source_line == Some(0)
             || region.source_file.is_some() != region.source_line.is_some()
         {
             push_error(
@@ -331,9 +338,12 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
         }
         if let Some(tile) = region.aosoa_tile_rows {
             if !matches!(region.layout, Layout::Aosoa) || !(2..=4096).contains(&tile) {
-                push_error(&mut report.errors, Some(&region.name),
+                push_error(
+                    &mut report.errors,
+                    Some(&region.name),
                     "ORES-LAYOUT017",
-                    "AoSoA tile size must be 2..=4096 rows and is only valid for aosoa layouts");
+                    "AoSoA tile size must be 2..=4096 rows and is only valid for aosoa layouts",
+                );
                 continue;
             }
         }
@@ -548,24 +558,20 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
         if region.hot
             && rows_large
             && region.random_cross_column_gathers == Some(true)
-            && matches!(region.layout, Layout::Soa | Layout::Aosoa | Layout::Archetype)
+            && matches!(
+                region.layout,
+                Layout::Soa | Layout::Aosoa | Layout::Archetype
+            )
         {
             add_finding(&mut report.findings, region,
                 "ORES-LAYOUT132", "random_column_gather", "medium",
                 "Observed random entity-ID gathers across columns may waste cache lines and TLB entries; profile gather locality and compare layouts before reordering.");
         }
-        if region.hot
-            && rows_large
-            && matches!(region.layout, Layout::Aosoa)
-        {
-            if let (Some(actual), Some(ideal)) =
-                (region.aosoa_tile_rows, suggested_tile_rows)
-            {
+        if region.hot && rows_large && matches!(region.layout, Layout::Aosoa) {
+            if let (Some(actual), Some(ideal)) = (region.aosoa_tile_rows, suggested_tile_rows) {
                 // A broad tolerance avoids claiming that SIMD width alone
                 // determines the best tile size.
-                if actual < (ideal / 2).max(2)
-                    || u64::from(actual) > u64::from(ideal) * 4
-                {
+                if actual < (ideal / 2).max(2) || u64::from(actual) > u64::from(ideal) * 4 {
                     add_finding(&mut report.findings, region,
                         "ORES-LAYOUT133", "aosoa_tile_benchmark", "low",
                         format!("AoSoA tile is {actual} rows while SIMD-width-only starting point is {ideal}; measure occupancy, tails, alignment and memory bandwidth before retuning."));
@@ -583,12 +589,11 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
                 "ORES-LAYOUT134", "dense_ecs_overhead", "low",
                 "Dense, stable, whole-pass ECS traversal may pay avoidable entity lookup or indirection costs; benchmark dense SoA/AoSoA or fused archetype iteration.");
         }
-        if region.hot && rows_large
+        if region.hot
+            && rows_large
             && matches!(region.layout, Layout::Archetype | Layout::SparseSet)
         {
-            if let (Some(changes), Some(rows)) =
-                (region.structural_changes_per_pass, region.rows)
-            {
+            if let (Some(changes), Some(rows)) = (region.structural_changes_per_pass, region.rows) {
                 if u128::from(changes) * 8 >= u128::from(rows) {
                     add_finding(&mut report.findings, region,
                         "ORES-LAYOUT135", "ecs_structural_churn", "medium",
@@ -630,8 +635,11 @@ pub fn analyze_layout(program: &LayoutProgram) -> LayoutReport {
         (a.region.as_str(), a.code, a.kind).cmp(&(b.region.as_str(), b.code, b.kind))
     });
     report.errors.sort_by(|a, b| {
-        (a.region.as_deref(), a.code, a.message.as_str())
-            .cmp(&(b.region.as_deref(), b.code, b.message.as_str()))
+        (a.region.as_deref(), a.code, a.message.as_str()).cmp(&(
+            b.region.as_deref(),
+            b.code,
+            b.message.as_str(),
+        ))
     });
     report
 }
@@ -886,12 +894,17 @@ mod tests {
         invalid.name = "bad.region".into();
         invalid.accessed_fields = vec![0, 0];
         let p = LayoutProgram {
-            schema_version: 1, evidence_complete: true, target: target(),
+            schema_version: 1,
+            evidence_complete: true,
+            target: target(),
             regions: vec![valid, invalid],
         };
         let r = analyze_layout(&p);
         assert!(r.has_errors());
-        assert!(r.findings.is_empty(), "never return partial optimization advice");
+        assert!(
+            r.findings.is_empty(),
+            "never return partial optimization advice"
+        );
         assert!(r.regions.is_empty());
     }
     #[test]
@@ -901,8 +914,15 @@ mod tests {
         r.source_file = Some("stdlib/runtime/scheduler.ores".into());
         r.source_line = Some(27);
         let report = analyze_layout(&program(r));
-        let finding = report.findings.iter().find(|f| f.code == "ORES-LAYOUT101").unwrap();
-        assert_eq!(finding.source_file.as_deref(), Some("stdlib/runtime/scheduler.ores"));
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.code == "ORES-LAYOUT101")
+            .unwrap();
+        assert_eq!(
+            finding.source_file.as_deref(),
+            Some("stdlib/runtime/scheduler.ores")
+        );
         assert_eq!(finding.source_line, Some(27));
     }
     #[test]

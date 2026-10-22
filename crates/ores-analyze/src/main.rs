@@ -19,9 +19,14 @@ fn read_bounded(path: &str, limit: u64) -> io::Result<String> {
     // A single extra byte distinguishes an oversized stream from a valid one.
     let mut buffer = String::new();
     if path == "-" {
-        io::stdin().lock().take(limit + 1).read_to_string(&mut buffer)?;
+        io::stdin()
+            .lock()
+            .take(limit + 1)
+            .read_to_string(&mut buffer)?;
     } else {
-        fs::File::open(path)?.take(limit + 1).read_to_string(&mut buffer)?;
+        fs::File::open(path)?
+            .take(limit + 1)
+            .read_to_string(&mut buffer)?;
     }
     if buffer.len() as u64 > limit {
         return Err(io::Error::new(
