@@ -1,5 +1,6 @@
 //! Prototype, versioned MIR-effect static analyzer for all Oreslang frontends.
 //! Conservative on absent bounds and unresolvable callees. No proof of WCET.
+pub mod safety;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -12,7 +13,6 @@ const MAX_FUNCTIONS: usize = 4096;
 const MAX_OPERATIONS: usize = 100_000;
 const MAX_NESTING: usize = 64;
 const MAX_CALL_DEPTH: usize = 128;
-
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -174,8 +174,16 @@ impl Engine<'_> {
             return found.clone();
         }
         if self.active.len() >= MAX_CALL_DEPTH {
-            self.emit("ORES-SA105", Severity::Error, name, "call depth exceeds analysis budget");
-            return Summary { unresolved_control_flow: true, ..Summary::default() };
+            self.emit(
+                "ORES-SA105",
+                Severity::Error,
+                name,
+                "call depth exceeds analysis budget",
+            );
+            return Summary {
+                unresolved_control_flow: true,
+                ..Summary::default()
+            };
         }
         // Cycles require separately verified recursion bounds and stack limits;
         // intentionally reject instead of assuming a finite upper bound.
@@ -239,14 +247,22 @@ impl Engine<'_> {
                     let callee = self.function(target);
                     effect.add_assign(&callee);
                 }
-                Operation::Loop { iterations, operations } => {
+                Operation::Loop {
+                    iterations,
+                    operations,
+                } => {
                     // An unreachable loop body contributes no effects or errors.
                     if *iterations != Some(0) {
                         let body = self.operations(owner, operations);
                         effect.add_assign(&body.scale(*iterations));
                         if iterations.is_none() {
                             effect.operations_upper_bound = None;
-                            self.emit("ORES-SA104", Severity::Warning, owner, "loop iteration limit is absent");
+                            self.emit(
+                                "ORES-SA104",
+                                Severity::Warning,
+                                owner,
+                                "loop iteration limit is absent",
+                            );
                         }
                     }
                 }
@@ -270,39 +286,84 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
     };
     // Explicit iterative preflight prevents recursive traversal of hostile IR.
     if program.functions.is_empty() {
-        engine.emit("ORES-SA003", Severity::Error, "<module>", "effect IR contains no functions");
-        return Report { schema_version: SCHEMA_VERSION,
-            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+        engine.emit(
+            "ORES-SA003",
+            Severity::Error,
+            "<module>",
+            "effect IR contains no functions",
+        );
+        return Report {
+            schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL,
+            diagnostics: engine.diagnostics,
+            functions: BTreeMap::new(),
+        };
     }
     if program.functions.len() > MAX_FUNCTIONS {
-        engine.emit("ORES-SA003", Severity::Error, "<module>", "function count exceeds budget");
-        return Report { schema_version: SCHEMA_VERSION,
-            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+        engine.emit(
+            "ORES-SA003",
+            Severity::Error,
+            "<module>",
+            "function count exceeds budget",
+        );
+        return Report {
+            schema_version: SCHEMA_VERSION,
+            assurance_level: ASSURANCE_LEVEL,
+            diagnostics: engine.diagnostics,
+            functions: BTreeMap::new(),
+        };
     }
     let mut count = 0usize;
     for function in &program.functions {
         if function.name.len() > 256 {
-            engine.emit("ORES-SA003", Severity::Error, "<module>", "function symbol exceeds budget");
-            return Report { schema_version: SCHEMA_VERSION,
-            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+            engine.emit(
+                "ORES-SA003",
+                Severity::Error,
+                "<module>",
+                "function symbol exceeds budget",
+            );
+            return Report {
+                schema_version: SCHEMA_VERSION,
+                assurance_level: ASSURANCE_LEVEL,
+                diagnostics: engine.diagnostics,
+                functions: BTreeMap::new(),
+            };
         }
         let mut pending: Vec<(&Operation, usize)> =
             function.operations.iter().map(|op| (op, 1)).collect();
         while let Some((op, depth)) = pending.pop() {
             count += 1;
             if count > MAX_OPERATIONS || depth > MAX_NESTING {
-                engine.emit("ORES-SA004", Severity::Error, "<module>", "effect graph exceeds depth/size budget");
-                return Report { schema_version: SCHEMA_VERSION,
-            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                engine.emit(
+                    "ORES-SA004",
+                    Severity::Error,
+                    "<module>",
+                    "effect graph exceeds depth/size budget",
+                );
+                return Report {
+                    schema_version: SCHEMA_VERSION,
+                    assurance_level: ASSURANCE_LEVEL,
+                    diagnostics: engine.diagnostics,
+                    functions: BTreeMap::new(),
+                };
             }
             if let Operation::Loop { operations, .. } = op {
                 pending.extend(operations.iter().map(|child| (child, depth + 1)));
             }
             if let Operation::Call { target } = op {
                 if target.len() > 256 {
-                    engine.emit("ORES-SA003", Severity::Error, "<module>", "call target exceeds budget");
-                    return Report { schema_version: SCHEMA_VERSION,
-            assurance_level: ASSURANCE_LEVEL, diagnostics: engine.diagnostics, functions: BTreeMap::new() };
+                    engine.emit(
+                        "ORES-SA003",
+                        Severity::Error,
+                        "<module>",
+                        "call target exceeds budget",
+                    );
+                    return Report {
+                        schema_version: SCHEMA_VERSION,
+                        assurance_level: ASSURANCE_LEVEL,
+                        diagnostics: engine.diagnostics,
+                        functions: BTreeMap::new(),
+                    };
                 }
             }
         }
@@ -354,8 +415,12 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
                 );
             }
             if summary.may_suspend {
-                engine.emit("ORES-SA305", severity, &function.name,
-                    "suspension cost and completion are not independently bounded");
+                engine.emit(
+                    "ORES-SA305",
+                    severity,
+                    &function.name,
+                    "suspension cost and completion are not independently bounded",
+                );
             }
             if summary.may_use_unsafe_ffi {
                 engine.emit(
@@ -397,7 +462,7 @@ pub fn analyze(program: &Program, profile: Profile) -> Report {
     });
     Report {
         schema_version: SCHEMA_VERSION,
-            assurance_level: ASSURANCE_LEVEL,
+        assurance_level: ASSURANCE_LEVEL,
         diagnostics: engine.diagnostics,
         functions: summaries,
     }
@@ -424,9 +489,9 @@ mod tests {
     }
     #[test]
     fn scalar_compiler_v1_fixture_is_valid_and_still_advisory() {
-        let p: Program = serde_json::from_str(
-            include_str!("../../../examples/rust-scalar-expected.json")
-        ).unwrap();
+        let p: Program =
+            serde_json::from_str(include_str!("../../../examples/rust-scalar-expected.json"))
+                .unwrap();
         assert_eq!(p.functions.len(), 1);
         assert_eq!(p.functions[0].name, "answer");
         assert_eq!(p.functions[0].operations.len(), 3);
@@ -520,7 +585,10 @@ mod tests {
     #[test]
     fn unreachable_loop_body_does_not_report_unknown_callee() {
         let p = sample(vec![Operation::Loop {
-            iterations: Some(0), operations: vec![Operation::Call { target: "missing".into() }]
+            iterations: Some(0),
+            operations: vec![Operation::Call {
+                target: "missing".into(),
+            }],
         }]);
         assert!(!analyze(&p, Profile::HardRealtime).has_errors());
     }
@@ -528,7 +596,10 @@ mod tests {
     fn nested_ir_exhausts_budget_before_recursion() {
         let mut op = Operation::BlockingIo;
         for _ in 0..(MAX_NESTING + 1) {
-            op = Operation::Loop { iterations: Some(1), operations: vec![op] };
+            op = Operation::Loop {
+                iterations: Some(1),
+                operations: vec![op],
+            };
         }
         let report = analyze(&sample(vec![op]), Profile::General);
         assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SA004"));
@@ -537,23 +608,39 @@ mod tests {
     fn acyclic_call_depth_is_bounded() {
         let p = Program {
             schema_version: 1,
-            functions: (0..(MAX_CALL_DEPTH + 2)).map(|i| Function {
-                name: format!("f{i}"),
-                operations: if i < MAX_CALL_DEPTH + 1 {
-                    vec![Operation::Call { target: format!("f{}", i + 1) }]
-                } else { vec![] },
-            }).collect(),
+            functions: (0..(MAX_CALL_DEPTH + 2))
+                .map(|i| Function {
+                    name: format!("f{i}"),
+                    operations: if i < MAX_CALL_DEPTH + 1 {
+                        vec![Operation::Call {
+                            target: format!("f{}", i + 1),
+                        }]
+                    } else {
+                        vec![]
+                    },
+                })
+                .collect(),
         };
-        assert!(analyze(&p, Profile::General).diagnostics.iter().any(|d| d.code == "ORES-SA105"));
+        assert!(analyze(&p, Profile::General)
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "ORES-SA105"));
     }
     #[test]
     fn exhaustive_small_loop_copy_bounds() {
         for iterations in 0..=5 {
             for bytes in 0..=5 {
-                let report = analyze(&sample(vec![Operation::Loop {
-                    iterations: Some(iterations), operations: vec![Operation::Copy { bytes: Some(bytes) }]
-                }]), Profile::HardRealtime);
-                assert_eq!(report.functions["main"].copies_upper_bound, Some(iterations * bytes));
+                let report = analyze(
+                    &sample(vec![Operation::Loop {
+                        iterations: Some(iterations),
+                        operations: vec![Operation::Copy { bytes: Some(bytes) }],
+                    }]),
+                    Profile::HardRealtime,
+                );
+                assert_eq!(
+                    report.functions["main"].copies_upper_bound,
+                    Some(iterations * bytes)
+                );
                 assert!(!report.has_errors());
             }
         }
@@ -565,7 +652,13 @@ mod tests {
     }
     #[test]
     fn empty_program_fails_closed() {
-        let report = analyze(&Program { schema_version: 1, functions: vec![] }, Profile::General);
+        let report = analyze(
+            &Program {
+                schema_version: 1,
+                functions: vec![],
+            },
+            Profile::General,
+        );
         assert!(report.has_errors());
     }
     #[test]

@@ -1,4 +1,8 @@
-use ores_analysis::{analyze, Profile, Program, MAX_IR_BYTES};
+use ores_analysis::{
+    analyze,
+    safety::{analyze_safety, SafetyProfile, SafetyProgram},
+    Profile, Program, MAX_IR_BYTES,
+};
 use std::{
     env, fs,
     io::{self, Read},
@@ -14,50 +18,87 @@ fn read_ir(path: &str) -> io::Result<String> {
     let mut input = String::new();
     bounded.read_to_string(&mut input)?;
     if input.len() > MAX_IR_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "effect IR exceeds 8 MiB limit"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "effect IR exceeds 8 MiB limit",
+        ));
     }
     Ok(input)
 }
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        eprintln!("usage: ores-analyze <input.json|-> <general|soft|hard>");
-        return ExitCode::from(2);
-    }
-    let profile = match args[2].as_str() {
+    let (safety, path, profile_name) = match args.as_slice() {
+        [_, path, profile] => (false, path.as_str(), profile.as_str()),
+        [_, flag, path, profile] if flag == "--safety" => (true, path.as_str(), profile.as_str()),
+        _ => {
+            eprintln!("usage: ores-analyze [--safety] <input.json|-> <general|soft|hard>");
+            return ExitCode::from(2);
+        }
+    };
+    let profile = match profile_name {
         "general" => Profile::General,
         "soft" => Profile::SoftRealtime,
         "hard" => Profile::HardRealtime,
         _ => {
-            eprintln!("unknown profile: {}", args[2]);
+            eprintln!("invalid profile '{profile_name}'");
             return ExitCode::from(2);
         }
     };
-    let input = read_ir(&args[1]);
-    let program: Program = match input {
-        Ok(data) => match serde_json::from_str(&data) {
-            Ok(program) => program,
-            Err(error) => {
-                eprintln!("invalid effect IR: {error}");
+    let input = read_ir(path);
+    let data = match input {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("cannot read input: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    if safety {
+        let program: SafetyProgram = match serde_json::from_str(&data) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("invalid MIR safety envelope: {err}");
                 return ExitCode::from(2);
             }
-        },
-        Err(error) => {
-            eprintln!("cannot read input: {error}");
-            return ExitCode::from(2);
+        };
+        let mode = match profile {
+            Profile::General => SafetyProfile::General,
+            Profile::SoftRealtime => SafetyProfile::Soft,
+            Profile::HardRealtime => SafetyProfile::Hard,
+        };
+        let result = analyze_safety(&program, mode);
+        match serde_json::to_string_pretty(&result) {
+            Ok(json) => println!("{json}"),
+            Err(err) => {
+                eprintln!("cannot serialize report: {err}");
+                return ExitCode::from(2);
+            }
         }
-    };
-    let report = analyze(&program, profile);
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(error) => {
-            eprintln!("serialization failed: {error}");
-            return ExitCode::from(2);
+        if result.admitted_to_static_gate {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
         }
-    }
-    if report.has_errors() {
-        ExitCode::from(1)
     } else {
-        ExitCode::SUCCESS
+        let program: Program = match serde_json::from_str(&data) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("invalid effect IR: {err}");
+                return ExitCode::from(2);
+            }
+        };
+        let result = analyze(&program, profile);
+        match serde_json::to_string_pretty(&result) {
+            Ok(json) => println!("{json}"),
+            Err(err) => {
+                eprintln!("cannot serialize report: {err}");
+                return ExitCode::from(2);
+            }
+        }
+        if result.has_errors() {
+            ExitCode::from(1)
+        } else {
+            ExitCode::SUCCESS
+        }
     }
 }

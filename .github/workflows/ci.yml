@@ -25,3 +25,9 @@ jobs:
             echo "Expected hard real-time profile to reject unsafe program"
             exit 1
           fi
+      - name: Validate safety admission controls
+        run: |
+          cargo run --locked -p ores-analyze -- --safety examples/safety-valid.json hard
+          if cargo run --locked -p ores-analyze -- --safety examples/safety-invalid.json hard; then
+            echo "Invalid MIR safety input unexpectedly passed"; exit 1
+          fi
