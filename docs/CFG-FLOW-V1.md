@@ -46,3 +46,17 @@ unresolved/ambiguous targets, overflow, state mutation, ownership transfers,
 allocation, FFI, suspension, cooperative resets, and nontrivial callee CFGs.
 No general-purpose call safety or WCET certificate is claimed. The caller's
 own budget includes the full transitive verified scalar work.
+
+## Exact-count structured loops (stacked prototype)
+
+The optional `{"kind":"repeat","iterations":N,"operations":[...]}` operation
+represents a **compiler-proven exact trip count**, not a runtime loop with an
+unproven or merely estimated upper bound. The verifier expands the body before
+applying the same ownership and cooperation rules to every executed iteration.
+The prototype limits repeats to 64 trips, nested depth to eight, and expanded
+events to 100,000 across the input. A missing/dynamic count, larger repeat, or
+resource-exhausting expansion is rejected.
+
+This is not general CFG cyclic-loop support. Arbitrary backedges remain rejected
+until loop invariants, zero-to-N exits, widening and suspension semantics are
+formally specified. The scalar compiler does not yet produce this repeat event.
