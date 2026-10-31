@@ -69,6 +69,23 @@ The CLI fixture `examples/flow-critical-cooperate-invalid.json` must exit
 **exactly 1**, include `ORES-FLOW203` and report
 `hard_realtime_certified=false`. A parse error (exit 2) does not pass the gate.
 
+**Unverified critical-region provenance:** The flow-v1 `critical_enter`
+and `critical_leave` markers contain only a text ID; they do not encode
+`critical-read` vs `critical-write`, owning actor identity, or a
+sealed-state capability. A balanced pair must therefore remain
+**non-admissible** (`ORES-FLOW204`) even when no checkpoint occurs inside it.
+The nesting and suspension checks still run to provide useful diagnostics.
+Only a future typed contract with independently authenticated lowering and
+capability provenance can promote these operations to static admission.
+
+**Work-cost consistency:** An explicit `compute(units=0)` event is rejected
+in every profile, rather than being treated as proof of completed work.
+Safety/CFG/flow report `ORES-SAF304`, `ORES-CFG303`, and
+`ORES-FLOW303` respectively. This is consistent with the effect-v1
+engine's zero-work rejection. Positive fixtures continue using real
+positive abstract units; synthetic statements of zero work cannot be used
+to fabricate a cooperative budget.
+
 
 Cross-organization private-source mirroring remains **blocked independently
 of runner capacity** pending the Oreslang source-transfer incident and
