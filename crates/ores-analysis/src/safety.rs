@@ -4,6 +4,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+const MAX_SAFETY_FUNCTIONS: usize = 4096;
+const MAX_SAFETY_EVENTS: usize = 100_000;
+const MAX_SAFETY_NAME_BYTES: usize = 256;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SafetyProgram {
@@ -203,9 +207,40 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
             "unsupported schema or effect manifest is not marked complete",
         );
     }
+    // A manifest with no functions is not a whole-program safety proof.
+    // Apply global bounds before per-event analysis to avoid unbounded work
+    // from callers that invoke the library directly rather than via the CLI.
+    let event_count = program.functions.iter().fold(0usize, |total, function| {
+        total.saturating_add(function.events.len())
+    });
+    if program.functions.is_empty()
+        || program.functions.len() > MAX_SAFETY_FUNCTIONS
+        || event_count > MAX_SAFETY_EVENTS
+    {
+        report(
+            &mut diagnostics,
+            "ORES-SAF004",
+            "<module>",
+            None,
+            "error",
+            "empty or oversized safety IR function/event manifest",
+        );
+        return SafetyReport {
+            schema_version: 1,
+            assurance_scope:
+                "checked_linear_effect_ir_only; no CFG, WCET, scheduler, runtime or dynamic wait proof",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+            lock_order_edges: edges,
+        };
+    }
     let mut function_names = HashSet::new();
     for function in &program.functions {
-        if function.name.trim().is_empty() || !function_names.insert(&function.name) {
+        if function.name.trim().is_empty()
+            || function.name.len() > MAX_SAFETY_NAME_BYTES
+            || !function_names.insert(&function.name)
+        {
             report(
                 &mut diagnostics,
                 "ORES-SAF002",
@@ -537,6 +572,36 @@ mod tests {
             .map(|d| d.code)
             .collect()
     }
+    #[test]
+    fn empty_manifest_cannot_pass_static_admission() {
+        let p: SafetyProgram = serde_json::from_str(
+            r#"{"schema_version":1,"effects_complete":true,"functions":[]}"#,
+        )
+        .unwrap();
+        let r = analyze_safety(&p, SafetyProfile::Hard);
+        assert!(!r.admitted_to_static_gate);
+        assert!(r.diagnostics.iter().any(|d| d.code == "ORES-SAF004"));
+        assert!(!r.hard_realtime_certified);
+    }
+
+    #[test]
+    fn global_event_budget_rejects_oversized_library_input() {
+        let mut p = case("[]", Some(10));
+        p.functions[0].events = std::iter::repeat_with(|| Event::Cooperate)
+            .take(MAX_SAFETY_EVENTS + 1)
+            .collect();
+        let r = analyze_safety(&p, SafetyProfile::General);
+        assert!(!r.admitted_to_static_gate);
+        assert!(r.diagnostics.iter().any(|d| d.code == "ORES-SAF004"));
+    }
+
+    #[test]
+    fn overlong_function_name_is_rejected() {
+        let mut p = case("[]", Some(10));
+        p.functions[0].name = "x".repeat(MAX_SAFETY_NAME_BYTES + 1);
+        assert!(codes(&p, SafetyProfile::General).contains(&"ORES-SAF002"));
+    }
+
     #[test]
     fn valid_loan_and_cooperation_admitted() {
         let p = case(
