@@ -442,7 +442,18 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::Cooperate => {
-                    state.compute_since_checkpoint = Some(0);
+                    // A scheduler checkpoint may park. An active loan or held
+                    // lock needs a proven pinned-frame/critical contract that
+                    // linear v1 does not carry. Do not credit an invalid yield.
+                    if !state.loans.is_empty() || !state.held_locks.is_empty() {
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF303",
+                            "cooperation with live loans or locks lacks a verified suspension contract".into(),
+                        );
+                    } else {
+                        state.compute_since_checkpoint = Some(0);
+                    }
                 }
                 Event::Suspend => {
                     if !state.loans.is_empty() || !state.held_locks.is_empty() {
@@ -733,6 +744,37 @@ mod tests {
         {"name":"b","control_flow":"linear","max_uninterrupted_units":10,"allow_error_propagation":false,"events":[{"kind":"lock","id":"Y"},{"kind":"lock","id":"X"},{"kind":"unlock","id":"X"},{"kind":"unlock","id":"Y"}]}]}"#).unwrap();
         assert!(codes(&p, SafetyProfile::Hard).contains(&"ORES-SAF204"));
     }
+    #[test]
+    fn cooperate_with_live_lock_is_rejected_in_linear_safety() {
+        let p = case(
+            r#"[{"kind":"lock","id":"L"},{"kind":"cooperate"},{"kind":"unlock","id":"L"}]"#,
+            Some(10),
+        );
+        let report = analyze_safety(&p, SafetyProfile::General);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF303"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperate_with_live_loan_is_rejected_in_linear_safety() {
+        let p = case(
+            r#"[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"cooperate"},{"kind":"end_borrow","loan":"l"}]"#,
+            Some(10),
+        );
+        let report = analyze_safety(&p, SafetyProfile::Hard);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF303"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperation_after_borrow_end_remains_admissible() {
+        let p = case(
+            r#"[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"end_borrow","loan":"l"},{"kind":"cooperate"}]"#,
+            Some(10),
+        );
+        assert!(analyze_safety(&p, SafetyProfile::Hard).admitted_to_static_gate);
+    }
+
     #[test]
     fn lock_held_across_wait_rejected() {
         let p = case(
