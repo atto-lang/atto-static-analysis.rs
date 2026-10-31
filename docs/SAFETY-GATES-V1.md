@@ -34,7 +34,18 @@ The linear `--safety` engine also rejects empty modules, more than 4,096
 functions, more than 100,000 total events, and function names longer than
 256 UTF-8 bytes, including when invoked directly as a Rust library.
 Diagnostics `ORES-SAF004` (manifest size) and `ORES-SAF002` (function
-identity) are admission failures. These limits bound parsing/analysis work;
+identity) are admission failures. The CFG-v2 engine additionally rejects
+modules above 4,096 total basic blocks or 100,000 total events with
+`ORES-CFG010` before starting state propagation; per-function limits still
+apply independently.
+
+Global lock-order cycle detection in both safety and CFG modes is
+**iterative**, so long attacker-controlled acyclic chains cannot exhaust the
+Rust call stack. Safety mode retains a deterministic cycle counterexample;
+the CFG mode uses a topological walk. Regression cases exercise a 10,000-edge
+chain with and without a closing cycle edge.
+
+These limits bound parsing/analysis work;
 they do **not** prove that a producer has enumerated all source effects.
 A self-asserted `effects_complete: true` must never be interpreted as
 independently authenticated compiler provenance.
