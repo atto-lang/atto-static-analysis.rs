@@ -43,7 +43,23 @@ Global lock-order cycle detection in both safety and CFG modes is
 **iterative**, so long attacker-controlled acyclic chains cannot exhaust the
 Rust call stack. Safety mode retains a deterministic cycle counterexample;
 the CFG mode uses a topological walk. Regression cases exercise a 10,000-edge
-chain with and without a closing cycle edge.
+chain with and without a closing cycle edge. The analyzers also reject lock
+nesting beyond 64 and count at most 16,384 attempted lock-order pairs globally
+(`ORES-SAF205`, `ORES-CFG206`). Repeated/across-function attempts count
+even when the resulting edge already exists, so graph construction itself
+remains bounded. The fail-closed policy does not imply dynamic deadlock
+freedom.
+
+The CFG-v1 flow checker now aborts without traversing functions when the
+module header/schema is invalid or the function count exceeds 4,096;
+this preserves `ORES-FLOW001`/`ORES-FLOW002` rejection with bounded
+follow-up work.
+
+Cross-organization private-source mirroring remains **blocked independently
+of runner capacity** pending the Oreslang source-transfer incident and
+authorization gates (conformance issues #22, #77, #127 and #212).
+Source-free private runner admission can prove scheduling availability only,
+not permission to publish this repo's contents to a test carrier.
 
 These limits bound parsing/analysis work;
 they do **not** prove that a producer has enumerated all source effects.
