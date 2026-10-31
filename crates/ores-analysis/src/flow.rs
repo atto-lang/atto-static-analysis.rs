@@ -396,10 +396,10 @@ fn step(
         FlowOp::Cooperate => {
             // Cooperation can suspend the actor; do not allow a checkpoint
             // inside a critical region or credit it as a completed yield.
-            if !state.critical.is_empty() {
+            if !state.critical.is_empty() || !state.loans.is_empty() {
                 err(
                     "ORES-FLOW203",
-                    "cooperation inside a live critical region".into(),
+                    "cooperation with live loans or critical region".into(),
                 );
             } else {
                 state.since_checkpoint = Some(0);
@@ -766,6 +766,26 @@ mod tests {
         let report = run(&input);
         assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
         assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperate_with_live_borrow_is_rejected() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"borrow","place":"x","loan":"loan","mutable":false},{"kind":"cooperate"},{"kind":"end_borrow","loan":"loan"},{"kind":"read","place":"x""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperative_checkpoint_after_end_borrow_is_admissible() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"borrow","place":"x","loan":"loan","mutable":false},{"kind":"end_borrow","loan":"loan"},{"kind":"cooperate"},{"kind":"read","place":"x""#,
+        );
+        assert!(run(&input).admitted_to_static_gate);
     }
 
     #[test]
