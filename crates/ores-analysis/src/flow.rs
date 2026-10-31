@@ -435,6 +435,18 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
             "invalid function count",
         );
     }
+    // Reject malformed/oversized module headers before walking caller-owned
+    // vectors. Otherwise a direct library invocation can consume unbounded
+    // analysis work despite the diagnostic it already emitted.
+    if !diagnostics.is_empty() {
+        return FlowReport {
+            schema_version: 1,
+            assurance_scope: "compiler-emitted acyclic CFG contract only; not verified WCET",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+        };
+    }
     // Global bounds apply even when every individual function is small.
     // Saturating arithmetic prevents a hostile in-memory program bypassing
     // this check on platforms with narrower usize.
@@ -669,6 +681,30 @@ mod tests {
             {"id":"join","ops":[{"kind":"read","place":"x"},{"kind":"compute","units":1}],
              "terminator":{"kind":"return"}}
         ]}]}"#;
+    #[test]
+    fn huge_or_empty_module_headers_fail_before_block_analysis() {
+        let mut program: FlowProgram = serde_json::from_str(SAFE).unwrap();
+        program.functions.clear();
+        let empty = analyze_flow(&program, FlowProfile::General);
+        assert!(!empty.admitted_to_static_gate);
+        assert_eq!(empty.diagnostics.len(), 1);
+        assert_eq!(empty.diagnostics[0].code, "ORES-FLOW002");
+
+        let mut program: FlowProgram = serde_json::from_str(SAFE).unwrap();
+        for i in 0..4096 {
+            program.functions.push(FlowFunction {
+                name: format!("f{i}"),
+                entry: "entry".into(),
+                max_uninterrupted_units: None,
+                blocks: Vec::new(),
+            });
+        }
+        let large = analyze_flow(&program, FlowProfile::General);
+        assert!(!large.admitted_to_static_gate);
+        assert_eq!(large.diagnostics.len(), 1);
+        assert_eq!(large.diagnostics[0].code, "ORES-FLOW002");
+    }
+
     #[test]
     fn balanced_diamond_admitted_and_budget_uses_max_path() {
         assert!(
