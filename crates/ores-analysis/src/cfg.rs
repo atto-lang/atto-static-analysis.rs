@@ -598,16 +598,19 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                         }
                     }
                     Event::Cooperate => {
-                        if !state.held_locks.is_empty() {
+                        // Without a verified pinned-continuation proof, a
+                        // cooperative yield cannot cross live loans or locks.
+                        if !state.held_locks.is_empty() || !state.loans.is_empty() {
                             diagnostic(
                                 &mut diagnostics,
                                 "ORES-CFG202",
                                 &f.name,
                                 at,
-                                "cooperate under lock",
+                                "cooperate with live loans or held locks",
                             );
+                        } else {
+                            state.uninterrupted = Some(0);
                         }
-                        state.uninterrupted = Some(0);
                     }
                     Event::Suspend => {
                         if !state.loans.is_empty() || !state.held_locks.is_empty() {
@@ -1086,6 +1089,25 @@ mod tests {
         ]}"#;
         assert!(has(&run(x, SafetyProfile::General), "ORES-CFG205"));
     }
+    #[test]
+    fn cooperative_yield_rejects_live_loan_even_when_later_released() {
+        let r = run(
+            &base(r#"[{"id":"a","events":[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"cooperate"},{"kind":"end_borrow","loan":"l"}],"terminator":{"kind":"return"}}]"#),
+            SafetyProfile::General,
+        );
+        assert!(has(&r, "ORES-CFG202"));
+        assert!(!r.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperative_yield_after_end_borrow_is_valid() {
+        let r = run(
+            &base(r#"[{"id":"a","events":[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"end_borrow","loan":"l"},{"kind":"cooperate"}],"terminator":{"kind":"return"}}]"#),
+            SafetyProfile::General,
+        );
+        assert!(r.admitted_to_static_gate, "{:?}", r.diagnostics);
+    }
+
     #[test]
     fn error_paths_must_balance() {
         let r = run(
