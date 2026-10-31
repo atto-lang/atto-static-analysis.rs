@@ -365,6 +365,14 @@ fn step(
             }
         }
         FlowOp::Compute { units } => {
+            // A zero-cost compute event cannot authenticate completed work:
+            // accepting it would allow a producer to understate budgets.
+            if *units == Some(0) {
+                err(
+                    "ORES-FLOW303",
+                    "zero-cost compute event cannot attest nonzero work".into(),
+                );
+            }
             state.since_checkpoint = state
                 .since_checkpoint
                 .and_then(|x| x.checked_add((*units)?));
@@ -884,6 +892,20 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == "ORES-FLOW108"));
+    }
+
+    #[test]
+    fn explicit_zero_cost_compute_is_not_work_evidence() {
+        let p: FlowProgram = serde_json::from_str(&SAFE.replace(
+            r#""units":2"#,
+            r#""units":0"#,
+        ))
+        .unwrap();
+        for profile in [FlowProfile::General, FlowProfile::Soft, FlowProfile::Hard] {
+            let report = analyze_flow(&p, profile);
+            assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW303"));
+            assert!(!report.admitted_to_static_gate);
+        }
     }
 
     #[test]
