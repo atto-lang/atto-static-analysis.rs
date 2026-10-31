@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 const MAX_SAFETY_FUNCTIONS: usize = 4096;
 const MAX_SAFETY_EVENTS: usize = 100_000;
 const MAX_SAFETY_NAME_BYTES: usize = 256;
+const MAX_HELD_LOCKS: usize = 64;
+const MAX_LOCK_ORDER_WORK: usize = 16_384;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -217,6 +219,7 @@ fn cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
 pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> SafetyReport {
     let mut diagnostics = Vec::new();
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut lock_order_work = 0usize;
     if program.schema_version != 1 || !program.effects_complete {
         report(
             &mut diagnostics,
@@ -386,7 +389,19 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                             "ORES-SAF200",
                             format!("invalid/reentrant lock acquisition '{id}'"),
                         );
+                    } else if state.held_locks.len() >= MAX_HELD_LOCKS
+                        || lock_order_work.saturating_add(state.held_locks.len())
+                            > MAX_LOCK_ORDER_WORK
+                    {
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF205",
+                            "lock nesting or global lock-order graph budget exceeded".into(),
+                        );
                     } else {
+                        // Account for attempted pairs, including duplicates, to
+                        // bound the construction work before allocating graph edges.
+                        lock_order_work += state.held_locks.len();
                         for prior in &state.held_locks {
                             edges.entry(prior.clone()).or_default().insert(id.clone());
                         }
@@ -656,6 +671,41 @@ mod tests {
         );
         assert!(codes(&p, SafetyProfile::Hard).contains(&"ORES-SAF302"));
     }
+    #[test]
+    fn nested_lock_depth_is_bounded_before_quadratic_edges() {
+        let mut program = case("[]", Some(10));
+        program.functions[0].events = (0..=MAX_HELD_LOCKS)
+            .map(|i| Event::Lock {
+                id: format!("L{i}"),
+            })
+            .collect();
+        let report = analyze_safety(&program, SafetyProfile::General);
+        assert!(!report.admitted_to_static_gate);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF205"));
+    }
+
+    #[test]
+    fn global_lock_order_work_budget_denies_repeated_deep_locking() {
+        let mut program = case("[]", Some(10));
+        let mut events = Vec::new();
+        for repeat in 0..(MAX_LOCK_ORDER_WORK / MAX_HELD_LOCKS + 1) {
+            for level in 0..MAX_HELD_LOCKS {
+                events.push(Event::Lock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+            for level in (0..MAX_HELD_LOCKS).rev() {
+                events.push(Event::Unlock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+        }
+        program.functions[0].events = events;
+        let report = analyze_safety(&program, SafetyProfile::General);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF205"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
     #[test]
     fn long_lock_order_chain_is_iterative_and_cycle_path_is_exact() {
         let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
