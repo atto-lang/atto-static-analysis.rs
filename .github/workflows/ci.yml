@@ -18,6 +18,24 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --workspace --all-targets
       - run: cargo run --locked -p ores-analyze -- --flow examples/flow-scalar-from-rust.json hard
+      - name: Reject cooperation in a live actor-state critical region
+        shell: bash
+        run: |
+          set +e
+          cargo run --locked -p ores-analyze -- --flow examples/flow-critical-cooperate-invalid.json hard > target/flow-critical-report.json
+          result=$?
+          set -e
+          if [ "$result" -ne 1 ]; then
+            echo "Expected analyzed IR rejection (exit 1), got $result"; exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          with open("target/flow-critical-report.json", encoding="utf-8") as stream:
+              report = json.load(stream)
+          assert report["admitted_to_static_gate"] is False
+          assert report["hard_realtime_certified"] is False
+          assert any(d["code"] == "ORES-FLOW203" for d in report["diagnostics"])
+          PY
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo run --locked -p ores-analyze -- examples/hard-realtime.json hard
       - name: Verify forward-call IR from Rust compiler
