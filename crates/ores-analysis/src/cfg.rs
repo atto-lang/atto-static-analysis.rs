@@ -625,6 +625,15 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                         state.uninterrupted = Some(0);
                     }
                     Event::Compute { units } => {
+                        if *units == Some(0) {
+                            diagnostic(
+                                &mut diagnostics,
+                                "ORES-CFG303",
+                                &f.name,
+                                at,
+                                "zero-cost compute event cannot attest work",
+                            );
+                        }
                         state.uninterrupted = state
                             .uninterrupted
                             .and_then(|old| old.checked_add((*units)?));
@@ -1010,6 +1019,18 @@ mod tests {
         assert!(has(&r, "ORES-CFG114"));
         assert!(has(&r, "ORES-CFG203"));
     }
+    #[test]
+    fn zero_cost_compute_is_rejected_by_every_profile() {
+        let fixture = base(
+            r#"[{"id":"a","events":[{"kind":"compute","units":0}],"terminator":{"kind":"return"}}]"#,
+        );
+        for profile in [SafetyProfile::General, SafetyProfile::Soft, SafetyProfile::Hard] {
+            let report = run(&fixture, profile);
+            assert!(has(&report, "ORES-CFG303"));
+            assert!(!report.admitted_to_static_gate);
+        }
+    }
+
     #[test]
     fn unknown_call_does_not_get_safety_certificate() {
         let r = run(
