@@ -345,6 +345,13 @@ fn step(
             }
         }
         FlowOp::CriticalEnter { id } => {
+            // This v1 marker carries no sealed-state capability, verified
+            // actor-owner identity, or read/write exclusivity certificate.
+            // Balanced enter/leave alone is never sufficient for admission.
+            err(
+                "ORES-FLOW204",
+                "critical region has no verified actor-state capability and access mode".into(),
+            );
             if id.trim().is_empty() || state.critical.contains(id) {
                 err(
                     "ORES-FLOW200",
@@ -754,6 +761,18 @@ mod tests {
             .iter()
             .any(|d| d.code == "ORES-FLOW330"));
     }
+    #[test]
+    fn balanced_critical_section_without_actor_capability_fails_closed() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"critical_enter","id":"actor_state"},{"kind":"write","place":"x"},{"kind":"critical_leave","id":"actor_state"},{"kind":"read","place":"x""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW204"));
+        assert!(!report.admitted_to_static_gate);
+        assert!(!report.hard_realtime_certified);
+    }
+
     #[test]
     fn critical_region_cannot_claim_cooperation_checkpoint() {
         let input = SAFE.replace(
