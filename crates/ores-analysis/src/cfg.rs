@@ -379,6 +379,14 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
             None,
             "invalid schema, empty/oversized module or incomplete effects",
         );
+        return CfgReport {
+            schema_version: 2,
+            assurance_scope: "acyclic_declared_scalar_cfg_only; no source-proof, WCET, scheduler or complete borrow verification",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+            lock_order_edges: BTreeMap::new(),
+        };
     }
     // The per-function limits are not sufficient for direct library callers:
     // check the entire module before constructing per-block ownership states.
@@ -813,6 +821,27 @@ mod tests {
     fn has(r: &CfgReport, code: &str) -> bool {
         r.diagnostics.iter().any(|d| d.code == code)
     }
+    #[test]
+    fn oversized_function_manifest_exits_before_cfg_traversal() {
+        let mut program: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        while program.functions.len() <= MAX_FUNCTIONS {
+            program.functions.push(CfgFunction {
+                name: format!("f{}", program.functions.len()),
+                entry: "a".into(),
+                max_uninterrupted_units: Some(10),
+                allow_error_propagation: false,
+                blocks: Vec::new(),
+            });
+        }
+        let report = analyze_cfg(&program, SafetyProfile::General);
+        assert!(!report.admitted_to_static_gate);
+        assert!(has(&report, "ORES-CFG000"));
+        assert_eq!(report.diagnostics.len(), 1);
+    }
+
     #[test]
     fn global_event_budget_is_enforced_for_library_callers() {
         let mut p: CfgProgram = serde_json::from_str(&base(
