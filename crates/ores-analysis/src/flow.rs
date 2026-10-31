@@ -393,7 +393,18 @@ fn step(
                 );
             }
         }
-        FlowOp::Cooperate => state.since_checkpoint = Some(0),
+        FlowOp::Cooperate => {
+            // Cooperation can suspend the actor; do not allow a checkpoint
+            // inside a critical region or credit it as a completed yield.
+            if !state.critical.is_empty() {
+                err(
+                    "ORES-FLOW203",
+                    "cooperation inside a live critical region".into(),
+                );
+            } else {
+                state.since_checkpoint = Some(0);
+            }
+        }
         FlowOp::Suspend => {
             if !state.loans.is_empty() || !state.critical.is_empty() {
                 err(
@@ -735,6 +746,37 @@ mod tests {
             .iter()
             .any(|d| d.code == "ORES-FLOW330"));
     }
+    #[test]
+    fn critical_region_cannot_claim_cooperation_checkpoint() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"critical_enter","id":"state"},{"kind":"cooperate"},{"kind":"critical_leave","id":"state"},{"kind":"read","place":"x""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn critical_cooperate_rejected_even_if_branches_rejoin_cleanly() {
+        let input = SAFE.replace(
+            r#""id":"left","ops":[{"kind":"compute","units":2}]"#,
+            r#""id":"left","ops":[{"kind":"critical_enter","id":"state"},{"kind":"cooperate"},{"kind":"critical_leave","id":"state"}]"#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperative_checkpoint_outside_critical_is_admissible() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"cooperate"},{"kind":"read","place":"x""#,
+        );
+        assert!(run(&input).admitted_to_static_gate);
+    }
+
     #[test]
     fn detects_use_after_move() {
         let bad = SAFE.replace(
