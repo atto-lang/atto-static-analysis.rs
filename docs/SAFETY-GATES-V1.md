@@ -10,7 +10,7 @@ The command \`ores-analyze --safety envelope.json hard\` consumes a structured, 
 | Borrowing | shared/exclusive conflict, unique loan IDs, use-after-move, no moves during loans, no loans escaping functions | paths, closures, interprocedural lifetimes, pinning, field splitting |
 | Actor ownership | reject mutable actor transfer; reject immutable transfer without an explicit freeze/trust-domain proof | actor-owned arenas, immutable sharing, capability provenance |
 | Deadlock hazards | per-function lock balance, nesting, lock-order dependency DAG across functions, reject cycles/reentrance/wait under lock | dynamic locks, channels, message-level waits, distributed deadlock, actor state locks |
-| Cooperative scheduling | abstract cost budget between \`cooperate\`/suspend checkpoints, unknown costs rejected | compiler-inserted watchdog, machine instructions, true execution times, loop/branch CFG |
+| Cooperative scheduling | abstract cost budget between `cooperate`/suspend checkpoints; reject cooperative yields with live loans, locks, or critical regions | compiler-inserted watchdog, machine instructions, real timing, pinned-continuation provenance |
 | Error handling | named fallible effects must be caught or explicitly propagated; no bare panic | typed Error hierarchy, catch/raise/unwind CFG, supervisor contracts |
 | Soft RT | static cooperative budget, no unbounded waits, explicit allocation boundaries | pauses, GC, scheduler and OS latencies |
 | Hard RT | preliminary static gate for no allocations, bounded work, no unverified FFI | target WCET, stack depth, scheduling/priority inversion, RT OS, hardware/interrupt evidence |
@@ -54,6 +54,21 @@ The CFG-v1 flow checker now aborts without traversing functions when the
 module header/schema is invalid or the function count exceeds 4,096;
 this preserves `ORES-FLOW001`/`ORES-FLOW002` rejection with bounded
 follow-up work.
+
+**Cooperative checkpoint parity (2026-10-31):** Each analyzer currently treats
+`cooperate` as a potentially suspending scheduler operation. Without
+independent pinned-frame/loan-lifetime proof, it must not reset an abstract
+work budget while any borrow/loan, acquired lock, or actor-state critical
+region is live. Linear safety returns `ORES-SAF303`; CFG-v2 returns
+`ORES-CFG202`; flow-v1 returns `ORES-FLOW203`. Tests cover denial while
+active and successful cooperation after ending a borrow.
+
+This conservative rule may be relaxed by a future verified pinned-continuation
+contract; it is not a proof that the compiler emitted complete source effects.
+The CLI fixture `examples/flow-critical-cooperate-invalid.json` must exit
+**exactly 1**, include `ORES-FLOW203` and report
+`hard_realtime_certified=false`. A parse error (exit 2) does not pass the gate.
+
 
 Cross-organization private-source mirroring remains **blocked independently
 of runner capacity** pending the Oreslang source-transfer incident and
