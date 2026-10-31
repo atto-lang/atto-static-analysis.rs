@@ -11,6 +11,8 @@ const MAX_EVENTS: usize = 8192;
 const MAX_IDENTIFIER: usize = 128;
 const MAX_MODULE_BLOCKS: usize = 4096;
 const MAX_MODULE_EVENTS: usize = 100_000;
+const MAX_HELD_LOCKS: usize = 64;
+const MAX_LOCK_ORDER_WORK: usize = 16_384;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -364,6 +366,7 @@ fn lock_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> bool {
 pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
     let mut diagnostics = Vec::new();
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut lock_order_work = 0usize;
     if program.schema_version != 2
         || !program.effects_complete
         || program.functions.is_empty()
@@ -552,7 +555,21 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                                 at,
                                 "invalid/reentrant lock",
                             );
+                        } else if state.held_locks.len() >= MAX_HELD_LOCKS
+                            || lock_order_work.saturating_add(state.held_locks.len())
+                                > MAX_LOCK_ORDER_WORK
+                        {
+                            diagnostic(
+                                &mut diagnostics,
+                                "ORES-CFG206",
+                                &f.name,
+                                at,
+                                "lock nesting or global lock-order graph budget exceeded",
+                            );
                         } else {
+                            // Count attempted pairs even when deduplicated:
+                            // the construction effort itself is security-bounded.
+                            lock_order_work += state.held_locks.len();
                             for held in &state.held_locks {
                                 edges.entry(held.clone()).or_default().insert(lock.clone());
                             }
@@ -972,6 +989,22 @@ mod tests {
         assert!(has(&r, "ORES-CFG402"));
         assert!(!r.hard_realtime_certified);
     }
+    #[test]
+    fn lock_depth_limit_rejects_quadratic_graph_growth() {
+        let mut p: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        p.functions[0].blocks[0].events = (0..=MAX_HELD_LOCKS)
+            .map(|i| Event::Lock {
+                id: format!("L{i}"),
+            })
+            .collect();
+        let r = analyze_cfg(&p, SafetyProfile::General);
+        assert!(has(&r, "ORES-CFG206"));
+        assert!(!r.admitted_to_static_gate);
+    }
+
     #[test]
     fn deep_lock_order_graph_is_checked_without_recursive_dfs() {
         let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
