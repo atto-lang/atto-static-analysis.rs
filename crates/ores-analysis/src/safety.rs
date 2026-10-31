@@ -247,7 +247,7 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                 &function.name,
                 None,
                 "error",
-                "duplicate or blank function name",
+                "duplicate, blank or oversized function name",
             );
         }
         if function.control_flow != "linear" {
