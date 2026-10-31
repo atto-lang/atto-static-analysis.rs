@@ -329,30 +329,35 @@ fn merge(
         _ => None,
     };
 }
+// A long lock-order chain must not consume a Rust call stack frame per edge.
+// Kahn's algorithm detects a cycle even if a target has no outgoing edges.
 fn lock_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> bool {
-    fn visit(
-        key: &str,
-        edges: &BTreeMap<String, BTreeSet<String>>,
-        marks: &mut HashMap<String, u8>,
-    ) -> bool {
-        match marks.get(key).copied() {
-            Some(1) => return true,
-            Some(2) => return false,
-            _ => {}
+    let mut incoming: BTreeMap<&str, usize> = BTreeMap::new();
+    for (from, targets) in edges {
+        incoming.entry(from.as_str()).or_insert(0);
+        for target in targets {
+            *incoming.entry(target.as_str()).or_insert(0) += 1;
         }
-        marks.insert(key.to_owned(), 1);
-        if let Some(targets) = edges.get(key) {
+    }
+
+    let mut ready: BTreeSet<&str> = incoming
+        .iter()
+        .filter_map(|(&name, &count)| (count == 0).then_some(name))
+        .collect();
+    let mut visited = 0usize;
+    while let Some(name) = ready.pop_first() {
+        visited += 1;
+        if let Some(targets) = edges.get(name) {
             for target in targets {
-                if visit(target, edges, marks) {
-                    return true;
+                let count = incoming.get_mut(target.as_str()).expect("indexed edge");
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert(target.as_str());
                 }
             }
         }
-        marks.insert(key.to_owned(), 2);
-        false
     }
-    let mut marks = HashMap::new();
-    edges.keys().any(|id| visit(id, edges, &mut marks))
+    visited != incoming.len()
 }
 pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
     let mut diagnostics = Vec::new();
@@ -922,6 +927,23 @@ mod tests {
         assert!(has(&r, "ORES-CFG402"));
         assert!(!r.hard_realtime_certified);
     }
+    #[test]
+    fn deep_lock_order_graph_is_checked_without_recursive_dfs() {
+        let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for i in 0..10_000 {
+            edges
+                .entry(format!("L{i}"))
+                .or_default()
+                .insert(format!("L{}", i + 1));
+        }
+        assert!(!lock_cycle(&edges), "a long path is not a cycle");
+        edges
+            .entry("L10000".into())
+            .or_default()
+            .insert("L0".into());
+        assert!(lock_cycle(&edges), "the closing edge creates a cycle");
+    }
+
     #[test]
     fn lock_cycle_across_functions_rejected() {
         let x = r#"{"schema_version":2,"effects_complete":true,"functions":[
