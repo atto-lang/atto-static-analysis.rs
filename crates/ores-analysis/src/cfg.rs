@@ -1006,6 +1006,31 @@ mod tests {
     }
 
     #[test]
+    fn global_lock_order_work_limit_rejects_repeated_acquisitions() {
+        let mut p: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        let mut events = Vec::new();
+        for repeat in 0..10 {
+            for level in 0..MAX_HELD_LOCKS {
+                events.push(Event::Lock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+            for level in (0..MAX_HELD_LOCKS).rev() {
+                events.push(Event::Unlock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+        }
+        p.functions[0].blocks[0].events = events;
+        let report = analyze_cfg(&p, SafetyProfile::General);
+        assert!(has(&report, "ORES-CFG206"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
     fn deep_lock_order_graph_is_checked_without_recursive_dfs() {
         let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for i in 0..10_000 {
