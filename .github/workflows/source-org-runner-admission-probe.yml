@@ -1,0 +1,19 @@
+name: source-org runner admission probe (no checkout)
+on:
+  push:
+    branches:
+      - ci/source-org-admission-probe-20261031
+permissions: {}
+jobs:
+  admission:
+    name: source-free ubuntu admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check actual runner assignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'source_free_admission=true\n'
+          printf 'runner_name=%s\n' "${RUNNER_NAME:-unset}"
+          printf 'source_checkout=false\n'
