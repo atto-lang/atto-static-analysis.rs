@@ -156,40 +156,60 @@ fn active_loans(state: &State, place: &str) -> (usize, usize) {
 fn check_owned(state: &State, place: &str) -> bool {
     state.values.get(place) == Some(&true)
 }
+// Keep the counterexample path while avoiding recursive DFS on untrusted IR.
 fn cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
-    fn visit(
+    struct Frame<'a> {
+        node: &'a str,
+        targets: Vec<&'a str>,
+        next: usize,
+    }
+    fn successors<'a>(
+        edges: &'a BTreeMap<String, BTreeSet<String>>,
         node: &str,
-        edges: &BTreeMap<String, BTreeSet<String>>,
-        marks: &mut HashMap<String, u8>,
-        stack: &mut Vec<String>,
-    ) -> Option<Vec<String>> {
-        match marks.get(node).copied() {
-            Some(1) => {
-                let at = stack.iter().position(|x| x == node).unwrap_or(0);
-                let mut chain = stack[at..].to_vec();
-                chain.push(node.to_owned());
-                return Some(chain);
-            }
-            Some(2) => return None,
-            _ => {}
+    ) -> Vec<&'a str> {
+        edges
+            .get(node)
+            .map(|targets| targets.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    let mut marks: HashMap<&str, u8> = HashMap::new();
+    for root in edges.keys().map(String::as_str) {
+        if marks.contains_key(root) {
+            continue;
         }
-        marks.insert(node.to_owned(), 1);
-        stack.push(node.to_owned());
-        if let Some(next) = edges.get(node) {
-            for target in next {
-                if let Some(result) = visit(target, edges, marks, stack) {
-                    return Some(result);
+        marks.insert(root, 1);
+        let mut stack = vec![Frame {
+            node: root,
+            targets: successors(edges, root),
+            next: 0,
+        }];
+        while let Some(frame) = stack.last_mut() {
+            if frame.next == frame.targets.len() {
+                marks.insert(frame.node, 2);
+                stack.pop();
+                continue;
+            }
+            let target = frame.targets[frame.next];
+            frame.next += 1;
+            match marks.get(target).copied() {
+                Some(1) => {
+                    let at = stack.iter().position(|f| f.node == target).unwrap_or(0);
+                    let mut chain: Vec<String> =
+                        stack[at..].iter().map(|f| f.node.to_owned()).collect();
+                    chain.push(target.to_owned());
+                    return Some(chain);
+                }
+                Some(2) => {}
+                _ => {
+                    marks.insert(target, 1);
+                    stack.push(Frame {
+                        node: target,
+                        targets: successors(edges, target),
+                        next: 0,
+                    });
                 }
             }
-        }
-        stack.pop();
-        marks.insert(node.to_owned(), 2);
-        None
-    }
-    let mut marks = HashMap::new();
-    for node in edges.keys() {
-        if let Some(result) = visit(node, edges, &mut marks, &mut Vec::new()) {
-            return Some(result);
         }
     }
     None
@@ -636,6 +656,26 @@ mod tests {
         );
         assert!(codes(&p, SafetyProfile::Hard).contains(&"ORES-SAF302"));
     }
+    #[test]
+    fn long_lock_order_chain_is_iterative_and_cycle_path_is_exact() {
+        let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for i in 0..10_000 {
+            edges
+                .entry(format!("L{i}"))
+                .or_default()
+                .insert(format!("L{}", i + 1));
+        }
+        assert!(cycle(&edges).is_none(), "long acyclic lock orders are valid");
+        edges
+            .entry("L10000".into())
+            .or_default()
+            .insert("L0".into());
+        let path = cycle(&edges).expect("closing edge must form a cycle");
+        assert_eq!(path.first().map(String::as_str), Some("L0"));
+        assert_eq!(path.last().map(String::as_str), Some("L0"));
+        assert_eq!(path.len(), 10_002);
+    }
+
     #[test]
     fn deadlock_lock_order_cycle_detected_globally() {
         let p: SafetyProgram = serde_json::from_str(r#"{"schema_version":1,"effects_complete":true,"functions":[
