@@ -17,6 +17,28 @@ The command \`ores-analyze --safety envelope.json hard\` consumes a structured, 
 
 \`hard_realtime_certified\` is always **false** in this version. Passing the static gate means only that the analyzed **linear IR trace** has no errors under the listed checks. An independently validated compiler emitter, function/CFG coverage, FFI contracts, target-specific WCET evidence, bounded stack, platform model and scheduler proof are still required before making a hard-RT claim.
 
+## Untrusted input and analyzer work budgets
+
+Every CLI entrypoint reads at most its byte limit plus one byte from both
+regular files and standard input. File metadata is **not** a security boundary:
+special files can report size zero, and ordinary files can grow during a read.
+
+| Input mode | Maximum input bytes |
+|---|---:|
+| `--cfg`, `--static-facts` | 1 MiB |
+| `--flow` | 4 MiB |
+| `--safety`, default effect IR | 8 MiB |
+| `--layout` | 16 MiB |
+
+The linear `--safety` engine also rejects empty modules, more than 4,096
+functions, more than 100,000 total events, and function names longer than
+256 UTF-8 bytes, including when invoked directly as a Rust library.
+Diagnostics `ORES-SAF004` (manifest size) and `ORES-SAF002` (function
+identity) are admission failures. These limits bound parsing/analysis work;
+they do **not** prove that a producer has enumerated all source effects.
+A self-asserted `effects_complete: true` must never be interpreted as
+independently authenticated compiler provenance.
+
 ## Command & semantics
 
 \`\`\`sh
