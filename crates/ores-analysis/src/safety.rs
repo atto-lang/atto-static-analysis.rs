@@ -420,6 +420,13 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::Compute { units } => {
+                    if *units == Some(0) {
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF304",
+                            "zero-cost compute event cannot attest completed work".into(),
+                        );
+                    }
                     state.compute_since_checkpoint = state
                         .compute_since_checkpoint
                         .and_then(|x| x.checked_add(units.as_ref().copied()?));
@@ -791,6 +798,16 @@ mod tests {
         );
         assert!(codes(&p, SafetyProfile::Soft).contains(&"ORES-SAF301"));
     }
+    #[test]
+    fn zero_cost_compute_cannot_be_admitted_as_work_evidence() {
+        let p = case(r#"[{"kind":"compute","units":0}]"#, Some(10));
+        for profile in [SafetyProfile::General, SafetyProfile::Soft, SafetyProfile::Hard] {
+            let report = analyze_safety(&p, profile);
+            assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF304"));
+            assert!(!report.admitted_to_static_gate);
+        }
+    }
+
     #[test]
     fn unknown_compute_cost_rejected() {
         let p = case(r#"[{"kind":"compute","units":null}]"#, Some(10));
