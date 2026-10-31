@@ -19,7 +19,11 @@ const MAX_FLOW_INPUT_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Apply the byte cap to the stream itself, not just file metadata: files can
 /// grow or be replaced after stat, and devices/FIFOs may report zero length.
-fn read_limited(reader: impl Read, max_bytes: u64, error_message: &'static str) -> io::Result<String> {
+fn read_limited(
+    reader: impl Read,
+    max_bytes: u64,
+    error_message: &'static str,
+) -> io::Result<String> {
     let mut data = String::new();
     reader.take(max_bytes + 1).read_to_string(&mut data)?;
     if data.len() as u64 > max_bytes {
@@ -315,7 +319,12 @@ mod input_tests {
     #[test]
     fn accepts_stream_at_exact_byte_limit() {
         let input = vec![b' '; 64];
-        assert_eq!(read_limited(input.as_slice(), 64, "oversize").unwrap().len(), 64);
+        assert_eq!(
+            read_limited(input.as_slice(), 64, "oversize")
+                .unwrap()
+                .len(),
+            64
+        );
     }
 
     #[test]
@@ -328,7 +337,7 @@ mod input_tests {
 
     #[test]
     fn rejects_non_utf8_input_instead_of_truncating_it() {
-        let error = read_limited([0xff].as_slice(), 64, "oversize").unwrap_err();
+        let error = read_limited([0xff_u8].as_slice(), 64, "oversize").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
