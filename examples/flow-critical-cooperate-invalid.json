@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "actor_state_handler",
+      "entry": "entry",
+      "max_uninterrupted_units": 8,
+      "blocks": [
+        {
+          "id": "entry",
+          "ops": [
+            {
+              "kind": "declare",
+              "place": "x",
+              "domain": "actor_private"
+            },
+            {
+              "kind": "critical_enter",
+              "id": "actor_state"
+            },
+            {
+              "kind": "compute",
+              "units": 2
+            },
+            {
+              "kind": "cooperate"
+            },
+            {
+              "kind": "critical_leave",
+              "id": "actor_state"
+            },
+            {
+              "kind": "read",
+              "place": "x"
+            }
+          ],
+          "terminator": {
+            "kind": "return"
+          }
+        }
+      ]
+    }
+  ]
+}
