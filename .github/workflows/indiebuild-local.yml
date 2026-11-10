@@ -1,15 +1,17 @@
 name: IndieBuild local verification
 on:
   push:
-    branches: [codex/indiebuild-local-proof]
-    paths: [.github/workflows/indiebuild-local.yml]
+    branches: [main, codex/indiebuild-local-proof]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 env:
-  EXPECTED_SHA: ${{ github.sha }}
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 jobs:
   test:
+    name: IndieBuild / test
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [indiebuild-linux-arm64]
     permissions:
       contents: read
@@ -17,6 +19,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ env.EXPECTED_SHA }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: Parse local exact-head producer/consumer gate (no external checkouts)
         run: python3 -m py_compile scripts/verify-cross-backend-static-facts-v0.py
