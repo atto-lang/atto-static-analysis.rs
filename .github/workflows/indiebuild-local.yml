@@ -1,0 +1,55 @@
+name: IndieBuild local verification
+on:
+  push:
+    branches: [codex/indiebuild-local-proof]
+    paths: [.github/workflows/indiebuild-local.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  EXPECTED_SHA: ${{ github.sha }}
+jobs:
+  test:
+    runs-on: [indiebuild-linux-arm64]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Parse local exact-head producer/consumer gate (no external checkouts)
+        run: python3 -m py_compile scripts/verify-cross-backend-static-facts-v0.py
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked --workspace --all-targets
+      - run: cargo run --locked -p ores-analyze -- --flow examples/flow-scalar-from-rust.json hard
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo run --locked -p ores-analyze -- examples/hard-realtime.json hard
+      - name: Verify forward-call IR from Rust compiler
+        run: |
+          cargo run --locked -p ores-analyze -- examples/forward-from-rust-compiler.json hard > target/forward-report.json
+          python3 -c 'import json; d=json.load(open("target/forward-report.json")); assert d["functions"]["main"]["operations_upper_bound"] == 6; assert not d["diagnostics"]'
+      - name: Reject unsafe program
+        run: |
+          if cargo run --locked -p ores-analyze -- examples/unsafe.json hard; then
+            echo "Expected hard real-time profile to reject unsafe program"
+            exit 1
+          fi
+      - name: Validate safety admission controls
+        run: |
+          cargo run --locked -p ores-analyze -- --safety examples/safety-valid.json hard
+          if cargo run --locked -p ores-analyze -- --safety examples/safety-invalid.json hard; then
+            echo "Invalid MIR safety input unexpectedly passed"; exit 1
+          fi
+      - name: Validate data-layout advisory analysis
+        run: |
+          cargo run --locked -p ores-analyze -- --layout examples/layout.json > target/layout-report.json
+          python3 -c 'import json; d=json.load(open("target/layout-report.json")); c={x["code"] for x in d["findings"]}; assert {"ORES-LAYOUT101","ORES-LAYOUT111","ORES-LAYOUT121","ORES-LAYOUT201"} <= c; assert not d["errors"]'
+      - name: CFG-v2 bounded ownership admission
+        run: |
+          cargo run --locked -p ores-analyze -- --cfg examples/cfg-valid.json hard > target/cfg-ok.json
+          python3 -c 'import json; d=json.load(open("target/cfg-ok.json")); assert d["admitted_to_static_gate"] and d["hard_realtime_certified"] is False'
+          if cargo run --locked -p ores-analyze -- --cfg examples/cfg-invalid.json hard > target/cfg-fail.json; then
+            echo "Expected CFG-v2 branch move to fail"; exit 1
+          fi
+          grep -q 'ORES-CFG111' target/cfg-fail.json
