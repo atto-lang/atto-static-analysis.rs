@@ -25,3 +25,15 @@ This README records the intended role of this repository; it is not a claim of f
 - [AttoLang](https://github.com/atto-lang)
 - [Language specification](https://github.com/atto-lang/atto-spec)
 - [Cross-platform conformance](https://github.com/atto-lang/atto-platform-conformance)
+
+## Repository ownership and contribution routing
+
+**Belongs here:** Static source analysis, lint rules, source-level diagnostics, ownership/effect checks and deterministic finding formats.
+
+**Belongs elsewhere:** Canonical rule definitions belong in atto-spec; emitting target code belongs in compiler repos; code formatting belongs in atto-format.
+
+**Security and portability boundary:** No autofix may introduce implicit conversions or mutate ownership. Include safe/unsafe negative fixtures, precise spans, false-positive regressions and no host execution of analyzed code.
+
+AttoLang is the public name; preserve existing Oreslang/.ores compatibility and use canonical .atto for new portable library source. This README defines scope, not feature readiness.
+
+**Acceptance:** name the exact source SHA/tree, runtime/toolchain, positive and negative checks and execution receipt before claiming support. Host-only tests and empty CI steps do not prove guest execution.
