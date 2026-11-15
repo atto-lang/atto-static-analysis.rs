@@ -37,3 +37,9 @@ This README records the intended role of this repository; it is not a claim of f
 AttoLang is the public name; preserve existing Oreslang/.ores compatibility and use canonical .atto for new portable library source. This README defines scope, not feature readiness.
 
 **Acceptance:** name the exact source SHA/tree, runtime/toolchain, positive and negative checks and execution receipt before claiming support. Host-only tests and empty CI steps do not prove guest execution.
+
+## Experimental `atto-lint-preview` (lexical scanner only)
+
+This repository now contains a dependency-free Rust CLI for flagging standalone `unsafe` lexical tokens outside string literals, Symbols, line comments, and nested block comments. It reports Unicode-aware 1-based line and column with code `ATTO001`. The implementation is a *lexical preview*, **not** a parser, borrow checker, or proof that a file without findings is safe. It has no autofix or execution of analyzed Atto source.
+
+Run `cargo test`, then `cargo run -- path/to/input.atto`. Exit code 1 means findings, 2 means invalid invocation/input; exit 0 means no lexical findings. Further versions need parser-derived tokens, target-specific validation and a stable SARIF output contract.

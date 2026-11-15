@@ -1,0 +1,12 @@
+[package]
+name = "atto-static-analysis"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "atto_static_analysis"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atto-lint-preview"
+path = "src/main.rs"
