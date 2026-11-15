@@ -1,0 +1,9 @@
+[package]
+name = "atto-static-analysis"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dependency-free source preflight for AttoLang static analysis"
+
+[lib]
+path = "src/lib.rs"
