@@ -43,3 +43,15 @@ This README records the intended role of this repository; it is not a claim of f
 AttoLang is the canonical project name; new source, examples and documentation use `.atto` and the `atto-lang` repository organization. This README defines scope, not feature readiness.
 
 **Acceptance:** name the exact source SHA/tree, runtime/toolchain, positive and negative checks and execution receipt before claiming support. Host-only tests and empty CI steps do not prove guest execution.
+
+## Source preflight (draft)
+
+The `src/lib.rs` preflight is a dependency-free **lexical input gate**, not a
+parser or proof of compiler support. It rejects inputs above 1 MiB, NUL bytes,
+nested block comments deeper than 1,024, and unterminated comments or quoted
+literals. Diagnostics carry zero-based UTF-8 byte offsets and one-based lines
+and byte columns (not UTF-16 editor positions).
+
+Run `cargo test --offline --all-targets` with a Rust toolchain. No code from
+the analyzed source is executed. Template interpolation, semantic ownership,
+types and target-specific admission remain the compiler's responsibility.
