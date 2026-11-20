@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "effects_complete": true,
+  "functions": [
+    {
+      "name": "tick",
+      "entry": "entry",
+      "max_uninterrupted_units": 8,
+      "allow_error_propagation": false,
+      "blocks": [
+        {
+          "id": "entry",
+          "events": [
+            {
+              "kind": "define",
+              "place": "flag"
+            },
+            {
+              "kind": "define",
+              "place": "value"
+            },
+            {
+              "kind": "compute",
+              "units": 2
+            }
+          ],
+          "terminator": {
+            "kind": "branch",
+            "condition": "flag",
+            "then_block": "left",
+            "else_block": "right"
+          }
+        },
+        {
+          "id": "left",
+          "events": [
+            {
+              "kind": "borrow",
+              "place": "value",
+              "loan": "shared",
+              "mutable": false
+            },
+            {
+              "kind": "end_borrow",
+              "loan": "shared"
+            },
+            {
+              "kind": "compute",
+              "units": 4
+            }
+          ],
+          "terminator": {
+            "kind": "jump",
+            "target": "join"
+          }
+        },
+        {
+          "id": "right",
+          "events": [
+            {
+              "kind": "compute",
+              "units": 3
+            }
+          ],
+          "terminator": {
+            "kind": "jump",
+            "target": "join"
+          }
+        },
+        {
+          "id": "join",
+          "events": [
+            {
+              "kind": "read",
+              "place": "value"
+            },
+            {
+              "kind": "cooperate"
+            },
+            {
+              "kind": "compute",
+              "units": 3
+            }
+          ],
+          "terminator": {
+            "kind": "return"
+          }
+        }
+      ]
+    }
+  ]
+}
