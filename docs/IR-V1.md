@@ -9,13 +9,11 @@ The current \`operations_upper_bound\` is an abstract number of effect nodes, **
 Keep the producer contract executable: every backend must feed golden fixtures with equivalent summaries and error codes.
 
 
-## Independent Rust frontend emitter (2026-10-19)
+### Assurance and trusted producer boundary
 
-The independent Rust compiler exports this format with:
-
-    oresc --effects tests/fixtures/forward.ores > effects.json
-    ores-analyze effects.json hard
-
-\`compute\` with non-null \`units\` represents bounded *abstract operations* for already-admitted scalar expressions. It does **not** represent instructions, cycles, energy, copies or a WCET certificate. Function calls remain explicit \`{"kind":"call","target":"callee"}\` entries, so the analyzer can compute conservative callgraph summaries and reject recursion without a separate bound. Consumers must not convert absence of observed effects in an incomplete producer into a runtime isolation proof.
-
-Current v1 producer covers only statically resolved signed-i64 functions and immutably bound local constants. No dynamic dispatch, heap effects, actors, async, FFI or user-defined type operations are supported by that frontend, so its effect export cannot be applied to such constructs. Any future extension must fail closed until every new node has explicit effect semantics.
+All current analyzer reports include
+`"assurance_level":"untrusted_effect_ir_model_only"`. The `hard` profile
+checks only the supplied abstract effects. It **cannot** certify hard-real-time
+execution or establish that a supplied JSON file corresponds to actual source.
+Until authenticated source-to-IR and target-specific WCET are implemented, no
+policy engine may treat a successful `hard` result as a certification token.
