@@ -14,75 +14,54 @@ use std::{
 };
 
 const MAX_LAYOUT_INPUT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_CFG_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_FLOW_INPUT_BYTES: u64 = 4 * 1024 * 1024;
 
-const MAX_CFG_INPUT_BYTES: u64 = 1_048_576;
+/// Apply the byte cap to the stream itself, not just file metadata: files can
+/// grow or be replaced after stat, and devices/FIFOs may report zero length.
+fn read_limited(
+    reader: impl Read,
+    max_bytes: u64,
+    error_message: &'static str,
+) -> io::Result<String> {
+    let mut data = String::new();
+    reader.take(max_bytes + 1).read_to_string(&mut data)?;
+    if data.len() as u64 > max_bytes {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, error_message));
+    }
+    Ok(data)
+}
+
+fn read_limited_path(path: &str, max_bytes: u64, error_message: &'static str) -> io::Result<String> {
+    if path == "-" {
+        read_limited(io::stdin().lock(), max_bytes, error_message)
+    } else {
+        read_limited(fs::File::open(path)?, max_bytes, error_message)
+    }
+}
 
 fn read_cfg_input(path: &str) -> io::Result<String> {
-    if path == "-" {
-        let mut data = String::new();
-        io::stdin()
-            .lock()
-            .take(MAX_CFG_INPUT_BYTES + 1)
-            .read_to_string(&mut data)?;
-        if data.len() as u64 > MAX_CFG_INPUT_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "CFG IR exceeds 1 MiB limit",
-            ));
-        }
-        Ok(data)
-    } else {
-        if fs::metadata(path)?.len() > MAX_CFG_INPUT_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "CFG IR exceeds 1 MiB limit",
-            ));
-        }
-        fs::read_to_string(path)
-    }
+    read_limited_path(path, MAX_CFG_INPUT_BYTES, "CFG IR exceeds 1 MiB limit")
 }
 
 fn read_bounded_ir(path: &str) -> io::Result<String> {
-    let reader: Box<dyn Read> = if path == "-" {
-        Box::new(io::stdin())
-    } else {
-        Box::new(fs::File::open(path)?)
-    };
-    let mut bounded = reader.take(MAX_IR_BYTES as u64 + 1);
-    let mut source = String::new();
-    bounded.read_to_string(&mut source)?;
-    if source.len() > MAX_IR_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "effect/safety IR exceeds 8 MiB input budget",
-        ));
-    }
-    Ok(source)
+    read_limited_path(
+        path,
+        MAX_IR_BYTES as u64,
+        "effect/safety IR exceeds 8 MiB input budget",
+    )
 }
 
 fn read_layout_input(path: &str) -> io::Result<String> {
-    if path == "-" {
-        let stdin = io::stdin();
-        let mut limited = stdin.lock().take(MAX_LAYOUT_INPUT_BYTES + 1);
-        let mut buffer = String::new();
-        limited.read_to_string(&mut buffer)?;
-        if buffer.len() as u64 > MAX_LAYOUT_INPUT_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "layout IR exceeds 16 MiB input limit",
-            ));
-        }
-        Ok(buffer)
-    } else {
-        let metadata = fs::metadata(path)?;
-        if metadata.len() > MAX_LAYOUT_INPUT_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "layout IR exceeds 16 MiB input limit",
-            ));
-        }
-        fs::read_to_string(path)
-    }
+    read_limited_path(
+        path,
+        MAX_LAYOUT_INPUT_BYTES,
+        "layout IR exceeds 16 MiB input limit",
+    )
+}
+
+fn read_flow_input(path: &str) -> io::Result<String> {
+    read_limited_path(path, MAX_FLOW_INPUT_BYTES, "flow IR exceeds 4 MiB limit")
 }
 
 fn main() -> ExitCode {
@@ -99,26 +78,13 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            let input: Box<dyn Read> = if path == "-" {
-                Box::new(io::stdin())
-            } else {
-                match fs::File::open(path) {
-                    Ok(file) => Box::new(file),
-                    Err(error) => {
-                        eprintln!("cannot read flow IR: {error}");
-                        return ExitCode::from(2);
-                    }
+            let data = match read_flow_input(path) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("cannot read flow IR: {error}");
+                    return ExitCode::from(2);
                 }
             };
-            let mut data = String::new();
-            if let Err(error) = input.take(4 * 1024 * 1024 + 1).read_to_string(&mut data) {
-                eprintln!("cannot read flow IR: {error}");
-                return ExitCode::from(2);
-            }
-            if data.len() > 4 * 1024 * 1024 {
-                eprintln!("flow IR exceeds 4 MiB limit");
-                return ExitCode::from(2);
-            }
             let program: FlowProgram = match serde_json::from_str(&data) {
                 Ok(program) => program,
                 Err(error) => {
@@ -343,5 +309,70 @@ fn main() -> ExitCode {
         } else {
             ExitCode::SUCCESS
         }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_stream_at_exact_byte_limit() {
+        let input = vec![b' '; 64];
+        assert_eq!(
+            read_limited(input.as_slice(), 64, "oversize")
+                .unwrap()
+                .len(),
+            64
+        );
+    }
+
+    #[test]
+    fn rejects_one_byte_over_stream_limit() {
+        let input = vec![b' '; 65];
+        let error = read_limited(input.as_slice(), 64, "oversize").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "oversize");
+    }
+
+    #[test]
+    fn rejects_non_utf8_input_instead_of_truncating_it() {
+        let error = read_limited([0xff_u8].as_slice(), 64, "oversize").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // /dev/zero has zero reported file size but an unbounded byte stream.
+    // This regresses the old metadata-check + unbounded read_to_string path.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cfg_path_enforces_cap_on_zero_length_device() {
+        assert_eq!(fs::metadata("/dev/zero").unwrap().len(), 0);
+        let error = read_cfg_input("/dev/zero").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("CFG IR exceeds 1 MiB"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn layout_path_enforces_cap_on_zero_length_device() {
+        let error = read_layout_input("/dev/zero").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("layout IR exceeds 16 MiB"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn flow_path_enforces_cap_on_zero_length_device() {
+        let error = read_flow_input("/dev/zero").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("flow IR exceeds 4 MiB"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn effect_and_safety_path_enforces_cap_on_zero_length_device() {
+        let error = read_bounded_ir("/dev/zero").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("effect/safety IR exceeds 8 MiB"));
     }
 }

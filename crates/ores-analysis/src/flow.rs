@@ -345,6 +345,13 @@ fn step(
             }
         }
         FlowOp::CriticalEnter { id } => {
+            // This v1 marker carries no sealed-state capability, verified
+            // actor-owner identity, or read/write exclusivity certificate.
+            // Balanced enter/leave alone is never sufficient for admission.
+            err(
+                "ORES-FLOW204",
+                "critical region has no verified actor-state capability and access mode".into(),
+            );
             if id.trim().is_empty() || state.critical.contains(id) {
                 err(
                     "ORES-FLOW200",
@@ -365,6 +372,14 @@ fn step(
             }
         }
         FlowOp::Compute { units } => {
+            // A zero-cost compute event cannot authenticate completed work:
+            // accepting it would allow a producer to understate budgets.
+            if *units == Some(0) {
+                err(
+                    "ORES-FLOW303",
+                    "zero-cost compute event cannot attest nonzero work".into(),
+                );
+            }
             state.since_checkpoint = state
                 .since_checkpoint
                 .and_then(|x| x.checked_add((*units)?));
@@ -393,7 +408,18 @@ fn step(
                 );
             }
         }
-        FlowOp::Cooperate => state.since_checkpoint = Some(0),
+        FlowOp::Cooperate => {
+            // Cooperation can suspend the actor; do not allow a checkpoint
+            // inside a critical region or credit it as a completed yield.
+            if !state.critical.is_empty() || !state.loans.is_empty() {
+                err(
+                    "ORES-FLOW203",
+                    "cooperation with live loans or critical region".into(),
+                );
+            } else {
+                state.since_checkpoint = Some(0);
+            }
+        }
         FlowOp::Suspend => {
             if !state.loans.is_empty() || !state.critical.is_empty() {
                 err(
@@ -434,6 +460,18 @@ pub fn analyze_flow(program: &FlowProgram, profile: FlowProfile) -> FlowReport {
             None,
             "invalid function count",
         );
+    }
+    // Reject malformed/oversized module headers before walking caller-owned
+    // vectors. Otherwise a direct library invocation can consume unbounded
+    // analysis work despite the diagnostic it already emitted.
+    if !diagnostics.is_empty() {
+        return FlowReport {
+            schema_version: 1,
+            assurance_scope: "compiler-emitted acyclic CFG contract only; not verified WCET",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+        };
     }
     // Global bounds apply even when every individual function is small.
     // Saturating arithmetic prevents a hostile in-memory program bypassing
@@ -670,6 +708,30 @@ mod tests {
              "terminator":{"kind":"return"}}
         ]}]}"#;
     #[test]
+    fn huge_or_empty_module_headers_fail_before_block_analysis() {
+        let mut program: FlowProgram = serde_json::from_str(SAFE).unwrap();
+        program.functions.clear();
+        let empty = analyze_flow(&program, FlowProfile::General);
+        assert!(!empty.admitted_to_static_gate);
+        assert_eq!(empty.diagnostics.len(), 1);
+        assert_eq!(empty.diagnostics[0].code, "ORES-FLOW002");
+
+        let mut program: FlowProgram = serde_json::from_str(SAFE).unwrap();
+        for i in 0..4096 {
+            program.functions.push(FlowFunction {
+                name: format!("f{i}"),
+                entry: "entry".into(),
+                max_uninterrupted_units: None,
+                blocks: Vec::new(),
+            });
+        }
+        let large = analyze_flow(&program, FlowProfile::General);
+        assert!(!large.admitted_to_static_gate);
+        assert_eq!(large.diagnostics.len(), 1);
+        assert_eq!(large.diagnostics[0].code, "ORES-FLOW002");
+    }
+
+    #[test]
     fn balanced_diamond_admitted_and_budget_uses_max_path() {
         assert!(
             run(SAFE).admitted_to_static_gate,
@@ -699,6 +761,69 @@ mod tests {
             .iter()
             .any(|d| d.code == "ORES-FLOW330"));
     }
+    #[test]
+    fn balanced_critical_section_without_actor_capability_fails_closed() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"critical_enter","id":"actor_state"},{"kind":"write","place":"x"},{"kind":"critical_leave","id":"actor_state"},{"kind":"read","place":"x""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW204"));
+        assert!(!report.admitted_to_static_gate);
+        assert!(!report.hard_realtime_certified);
+    }
+
+    #[test]
+    fn critical_region_cannot_claim_cooperation_checkpoint() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"critical_enter","id":"state"},{"kind":"cooperate"},{"kind":"critical_leave","id":"state"},{"kind":"read","place":"x""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn critical_cooperate_rejected_even_if_branches_rejoin_cleanly() {
+        let input = SAFE.replace(
+            r#""id":"left","ops":[{"kind":"compute","units":2}]"#,
+            r#""id":"left","ops":[{"kind":"critical_enter","id":"state"},{"kind":"cooperate"},{"kind":"critical_leave","id":"state"}]"#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperate_with_live_borrow_is_rejected() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"borrow","place":"x","loan":"loan","mutable":false},{"kind":"cooperate"},{"kind":"end_borrow","loan":"loan"},{"kind":"read","place":"x""#,
+        );
+        let report = run(&input);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW203"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperative_checkpoint_after_end_borrow_is_admissible() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"borrow","place":"x","loan":"loan","mutable":false},{"kind":"end_borrow","loan":"loan"},{"kind":"cooperate"},{"kind":"read","place":"x""#,
+        );
+        assert!(run(&input).admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperative_checkpoint_outside_critical_is_admissible() {
+        let input = SAFE.replace(
+            r#""kind":"read","place":"x""#,
+            r#""kind":"cooperate"},{"kind":"read","place":"x""#,
+        );
+        assert!(run(&input).admitted_to_static_gate);
+    }
+
     #[test]
     fn detects_use_after_move() {
         let bad = SAFE.replace(
@@ -786,6 +911,20 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == "ORES-FLOW108"));
+    }
+
+    #[test]
+    fn explicit_zero_cost_compute_is_not_work_evidence() {
+        let p: FlowProgram = serde_json::from_str(&SAFE.replace(
+            r#""units":2"#,
+            r#""units":0"#,
+        ))
+        .unwrap();
+        for profile in [FlowProfile::General, FlowProfile::Soft, FlowProfile::Hard] {
+            let report = analyze_flow(&p, profile);
+            assert!(report.diagnostics.iter().any(|d| d.code == "ORES-FLOW303"));
+            assert!(!report.admitted_to_static_gate);
+        }
     }
 
     #[test]

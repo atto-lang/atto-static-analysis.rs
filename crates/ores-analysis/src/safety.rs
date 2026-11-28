@@ -4,6 +4,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+const MAX_SAFETY_FUNCTIONS: usize = 4096;
+const MAX_SAFETY_EVENTS: usize = 100_000;
+const MAX_SAFETY_NAME_BYTES: usize = 256;
+const MAX_HELD_LOCKS: usize = 64;
+const MAX_LOCK_ORDER_WORK: usize = 16_384;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SafetyProgram {
@@ -152,40 +158,60 @@ fn active_loans(state: &State, place: &str) -> (usize, usize) {
 fn check_owned(state: &State, place: &str) -> bool {
     state.values.get(place) == Some(&true)
 }
+// Keep the counterexample path while avoiding recursive DFS on untrusted IR.
 fn cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
-    fn visit(
+    struct Frame<'a> {
+        node: &'a str,
+        targets: Vec<&'a str>,
+        next: usize,
+    }
+    fn successors<'a>(
+        edges: &'a BTreeMap<String, BTreeSet<String>>,
         node: &str,
-        edges: &BTreeMap<String, BTreeSet<String>>,
-        marks: &mut HashMap<String, u8>,
-        stack: &mut Vec<String>,
-    ) -> Option<Vec<String>> {
-        match marks.get(node).copied() {
-            Some(1) => {
-                let at = stack.iter().position(|x| x == node).unwrap_or(0);
-                let mut chain = stack[at..].to_vec();
-                chain.push(node.to_owned());
-                return Some(chain);
-            }
-            Some(2) => return None,
-            _ => {}
+    ) -> Vec<&'a str> {
+        edges
+            .get(node)
+            .map(|targets| targets.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    let mut marks: HashMap<&str, u8> = HashMap::new();
+    for root in edges.keys().map(String::as_str) {
+        if marks.contains_key(root) {
+            continue;
         }
-        marks.insert(node.to_owned(), 1);
-        stack.push(node.to_owned());
-        if let Some(next) = edges.get(node) {
-            for target in next {
-                if let Some(result) = visit(target, edges, marks, stack) {
-                    return Some(result);
+        marks.insert(root, 1);
+        let mut stack = vec![Frame {
+            node: root,
+            targets: successors(edges, root),
+            next: 0,
+        }];
+        while let Some(frame) = stack.last_mut() {
+            if frame.next == frame.targets.len() {
+                marks.insert(frame.node, 2);
+                stack.pop();
+                continue;
+            }
+            let target = frame.targets[frame.next];
+            frame.next += 1;
+            match marks.get(target).copied() {
+                Some(1) => {
+                    let at = stack.iter().position(|f| f.node == target).unwrap_or(0);
+                    let mut chain: Vec<String> =
+                        stack[at..].iter().map(|f| f.node.to_owned()).collect();
+                    chain.push(target.to_owned());
+                    return Some(chain);
+                }
+                Some(2) => {}
+                _ => {
+                    marks.insert(target, 1);
+                    stack.push(Frame {
+                        node: target,
+                        targets: successors(edges, target),
+                        next: 0,
+                    });
                 }
             }
-        }
-        stack.pop();
-        marks.insert(node.to_owned(), 2);
-        None
-    }
-    let mut marks = HashMap::new();
-    for node in edges.keys() {
-        if let Some(result) = visit(node, edges, &mut marks, &mut Vec::new()) {
-            return Some(result);
         }
     }
     None
@@ -193,6 +219,7 @@ fn cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
 pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> SafetyReport {
     let mut diagnostics = Vec::new();
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut lock_order_work = 0usize;
     if program.schema_version != 1 || !program.effects_complete {
         report(
             &mut diagnostics,
@@ -203,16 +230,47 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
             "unsupported schema or effect manifest is not marked complete",
         );
     }
+    // A manifest with no functions is not a whole-program safety proof.
+    // Apply global bounds before per-event analysis to avoid unbounded work
+    // from callers that invoke the library directly rather than via the CLI.
+    let event_count = program.functions.iter().fold(0usize, |total, function| {
+        total.saturating_add(function.events.len())
+    });
+    if program.functions.is_empty()
+        || program.functions.len() > MAX_SAFETY_FUNCTIONS
+        || event_count > MAX_SAFETY_EVENTS
+    {
+        report(
+            &mut diagnostics,
+            "ORES-SAF004",
+            "<module>",
+            None,
+            "error",
+            "empty or oversized safety IR function/event manifest",
+        );
+        return SafetyReport {
+            schema_version: 1,
+            assurance_scope:
+                "checked_linear_effect_ir_only; no CFG, WCET, scheduler, runtime or dynamic wait proof",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+            lock_order_edges: edges,
+        };
+    }
     let mut function_names = HashSet::new();
     for function in &program.functions {
-        if function.name.trim().is_empty() || !function_names.insert(&function.name) {
+        if function.name.trim().is_empty()
+            || function.name.len() > MAX_SAFETY_NAME_BYTES
+            || !function_names.insert(&function.name)
+        {
             report(
                 &mut diagnostics,
                 "ORES-SAF002",
                 &function.name,
                 None,
                 "error",
-                "duplicate or blank function name",
+                "duplicate, blank or oversized function name",
             );
         }
         if function.control_flow != "linear" {
@@ -331,7 +389,19 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                             "ORES-SAF200",
                             format!("invalid/reentrant lock acquisition '{id}'"),
                         );
+                    } else if state.held_locks.len() >= MAX_HELD_LOCKS
+                        || lock_order_work.saturating_add(state.held_locks.len())
+                            > MAX_LOCK_ORDER_WORK
+                    {
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF205",
+                            "lock nesting or global lock-order graph budget exceeded".into(),
+                        );
                     } else {
+                        // Account for attempted pairs, including duplicates, to
+                        // bound the construction work before allocating graph edges.
+                        lock_order_work += state.held_locks.len();
                         for prior in &state.held_locks {
                             edges.entry(prior.clone()).or_default().insert(id.clone());
                         }
@@ -350,6 +420,13 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::Compute { units } => {
+                    if *units == Some(0) {
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF304",
+                            "zero-cost compute event cannot attest completed work".into(),
+                        );
+                    }
                     state.compute_since_checkpoint = state
                         .compute_since_checkpoint
                         .and_then(|x| x.checked_add(units.as_ref().copied()?));
@@ -372,7 +449,18 @@ pub fn analyze_safety(program: &SafetyProgram, profile: SafetyProfile) -> Safety
                     }
                 }
                 Event::Cooperate => {
-                    state.compute_since_checkpoint = Some(0);
+                    // A scheduler checkpoint may park. An active loan or held
+                    // lock needs a proven pinned-frame/critical contract that
+                    // linear v1 does not carry. Do not credit an invalid yield.
+                    if !state.loans.is_empty() || !state.held_locks.is_empty() {
+                        err(
+                            &mut diagnostics,
+                            "ORES-SAF303",
+                            "cooperation with live loans or locks lacks a verified suspension contract".into(),
+                        );
+                    } else {
+                        state.compute_since_checkpoint = Some(0);
+                    }
                 }
                 Event::Suspend => {
                     if !state.loans.is_empty() || !state.held_locks.is_empty() {
@@ -538,6 +626,36 @@ mod tests {
             .collect()
     }
     #[test]
+    fn empty_manifest_cannot_pass_static_admission() {
+        let p: SafetyProgram = serde_json::from_str(
+            r#"{"schema_version":1,"effects_complete":true,"functions":[]}"#,
+        )
+        .unwrap();
+        let r = analyze_safety(&p, SafetyProfile::Hard);
+        assert!(!r.admitted_to_static_gate);
+        assert!(r.diagnostics.iter().any(|d| d.code == "ORES-SAF004"));
+        assert!(!r.hard_realtime_certified);
+    }
+
+    #[test]
+    fn global_event_budget_rejects_oversized_library_input() {
+        let mut p = case("[]", Some(10));
+        p.functions[0].events = std::iter::repeat_with(|| Event::Cooperate)
+            .take(MAX_SAFETY_EVENTS + 1)
+            .collect();
+        let r = analyze_safety(&p, SafetyProfile::General);
+        assert!(!r.admitted_to_static_gate);
+        assert!(r.diagnostics.iter().any(|d| d.code == "ORES-SAF004"));
+    }
+
+    #[test]
+    fn overlong_function_name_is_rejected() {
+        let mut p = case("[]", Some(10));
+        p.functions[0].name = "x".repeat(MAX_SAFETY_NAME_BYTES + 1);
+        assert!(codes(&p, SafetyProfile::General).contains(&"ORES-SAF002"));
+    }
+
+    #[test]
     fn valid_loan_and_cooperation_admitted() {
         let p = case(
             r#"[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"a","mutable":false},{"kind":"end_borrow","loan":"a"},{"kind":"compute","units":2},{"kind":"cooperate"},{"kind":"compute","units":3}]"#,
@@ -572,12 +690,98 @@ mod tests {
         assert!(codes(&p, SafetyProfile::Hard).contains(&"ORES-SAF302"));
     }
     #[test]
+    fn nested_lock_depth_is_bounded_before_quadratic_edges() {
+        let mut program = case("[]", Some(10));
+        program.functions[0].events = (0..=MAX_HELD_LOCKS)
+            .map(|i| Event::Lock {
+                id: format!("L{i}"),
+            })
+            .collect();
+        let report = analyze_safety(&program, SafetyProfile::General);
+        assert!(!report.admitted_to_static_gate);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF205"));
+    }
+
+    #[test]
+    fn global_lock_order_work_budget_denies_repeated_deep_locking() {
+        let mut program = case("[]", Some(10));
+        let mut events = Vec::new();
+        for repeat in 0..(MAX_LOCK_ORDER_WORK / MAX_HELD_LOCKS + 1) {
+            for level in 0..MAX_HELD_LOCKS {
+                events.push(Event::Lock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+            for level in (0..MAX_HELD_LOCKS).rev() {
+                events.push(Event::Unlock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+        }
+        program.functions[0].events = events;
+        let report = analyze_safety(&program, SafetyProfile::General);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF205"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn long_lock_order_chain_is_iterative_and_cycle_path_is_exact() {
+        let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for i in 0..10_000 {
+            edges
+                .entry(format!("L{i}"))
+                .or_default()
+                .insert(format!("L{}", i + 1));
+        }
+        assert!(cycle(&edges).is_none(), "long acyclic lock orders are valid");
+        edges
+            .entry("L10000".into())
+            .or_default()
+            .insert("L0".into());
+        let path = cycle(&edges).expect("closing edge must form a cycle");
+        assert_eq!(path.first().map(String::as_str), Some("L0"));
+        assert_eq!(path.last().map(String::as_str), Some("L0"));
+        assert_eq!(path.len(), 10_002);
+    }
+
+    #[test]
     fn deadlock_lock_order_cycle_detected_globally() {
         let p: SafetyProgram = serde_json::from_str(r#"{"schema_version":1,"effects_complete":true,"functions":[
         {"name":"a","control_flow":"linear","max_uninterrupted_units":10,"allow_error_propagation":false,"events":[{"kind":"lock","id":"X"},{"kind":"lock","id":"Y"},{"kind":"unlock","id":"Y"},{"kind":"unlock","id":"X"}]},
         {"name":"b","control_flow":"linear","max_uninterrupted_units":10,"allow_error_propagation":false,"events":[{"kind":"lock","id":"Y"},{"kind":"lock","id":"X"},{"kind":"unlock","id":"X"},{"kind":"unlock","id":"Y"}]}]}"#).unwrap();
         assert!(codes(&p, SafetyProfile::Hard).contains(&"ORES-SAF204"));
     }
+    #[test]
+    fn cooperate_with_live_lock_is_rejected_in_linear_safety() {
+        let p = case(
+            r#"[{"kind":"lock","id":"L"},{"kind":"cooperate"},{"kind":"unlock","id":"L"}]"#,
+            Some(10),
+        );
+        let report = analyze_safety(&p, SafetyProfile::General);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF303"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperate_with_live_loan_is_rejected_in_linear_safety() {
+        let p = case(
+            r#"[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"cooperate"},{"kind":"end_borrow","loan":"l"}]"#,
+            Some(10),
+        );
+        let report = analyze_safety(&p, SafetyProfile::Hard);
+        assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF303"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperation_after_borrow_end_remains_admissible() {
+        let p = case(
+            r#"[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"end_borrow","loan":"l"},{"kind":"cooperate"}]"#,
+            Some(10),
+        );
+        assert!(analyze_safety(&p, SafetyProfile::Hard).admitted_to_static_gate);
+    }
+
     #[test]
     fn lock_held_across_wait_rejected() {
         let p = case(
@@ -594,6 +798,16 @@ mod tests {
         );
         assert!(codes(&p, SafetyProfile::Soft).contains(&"ORES-SAF301"));
     }
+    #[test]
+    fn zero_cost_compute_cannot_be_admitted_as_work_evidence() {
+        let p = case(r#"[{"kind":"compute","units":0}]"#, Some(10));
+        for profile in [SafetyProfile::General, SafetyProfile::Soft, SafetyProfile::Hard] {
+            let report = analyze_safety(&p, profile);
+            assert!(report.diagnostics.iter().any(|d| d.code == "ORES-SAF304"));
+            assert!(!report.admitted_to_static_gate);
+        }
+    }
+
     #[test]
     fn unknown_compute_cost_rejected() {
         let p = case(r#"[{"kind":"compute","units":null}]"#, Some(10));

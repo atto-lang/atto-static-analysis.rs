@@ -9,6 +9,10 @@ const MAX_FUNCTIONS: usize = 256;
 const MAX_BLOCKS: usize = 512;
 const MAX_EVENTS: usize = 8192;
 const MAX_IDENTIFIER: usize = 128;
+const MAX_MODULE_BLOCKS: usize = 4096;
+const MAX_MODULE_EVENTS: usize = 100_000;
+const MAX_HELD_LOCKS: usize = 64;
+const MAX_LOCK_ORDER_WORK: usize = 16_384;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -329,34 +333,40 @@ fn merge(
         _ => None,
     };
 }
+// A long lock-order chain must not consume a Rust call stack frame per edge.
+// Kahn's algorithm detects a cycle even if a target has no outgoing edges.
 fn lock_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> bool {
-    fn visit(
-        key: &str,
-        edges: &BTreeMap<String, BTreeSet<String>>,
-        marks: &mut HashMap<String, u8>,
-    ) -> bool {
-        match marks.get(key).copied() {
-            Some(1) => return true,
-            Some(2) => return false,
-            _ => {}
+    let mut incoming: BTreeMap<&str, usize> = BTreeMap::new();
+    for (from, targets) in edges {
+        incoming.entry(from.as_str()).or_insert(0);
+        for target in targets {
+            *incoming.entry(target.as_str()).or_insert(0) += 1;
         }
-        marks.insert(key.to_owned(), 1);
-        if let Some(targets) = edges.get(key) {
+    }
+
+    let mut ready: BTreeSet<&str> = incoming
+        .iter()
+        .filter_map(|(&name, &count)| (count == 0).then_some(name))
+        .collect();
+    let mut visited = 0usize;
+    while let Some(name) = ready.pop_first() {
+        visited += 1;
+        if let Some(targets) = edges.get(name) {
             for target in targets {
-                if visit(target, edges, marks) {
-                    return true;
+                let count = incoming.get_mut(target.as_str()).expect("indexed edge");
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert(target.as_str());
                 }
             }
         }
-        marks.insert(key.to_owned(), 2);
-        false
     }
-    let mut marks = HashMap::new();
-    edges.keys().any(|id| visit(id, edges, &mut marks))
+    visited != incoming.len()
 }
 pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
     let mut diagnostics = Vec::new();
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut lock_order_work = 0usize;
     if program.schema_version != 2
         || !program.effects_complete
         || program.functions.is_empty()
@@ -369,6 +379,42 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
             None,
             "invalid schema, empty/oversized module or incomplete effects",
         );
+        return CfgReport {
+            schema_version: 2,
+            assurance_scope: "acyclic_declared_scalar_cfg_only; no source-proof, WCET, scheduler or complete borrow verification",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+            lock_order_edges: BTreeMap::new(),
+        };
+    }
+    // The per-function limits are not sufficient for direct library callers:
+    // check the entire module before constructing per-block ownership states.
+    let total_blocks = program.functions.iter().fold(0usize, |count, function| {
+        count.saturating_add(function.blocks.len())
+    });
+    let total_events = program.functions.iter().fold(0usize, |count, function| {
+        function
+            .blocks
+            .iter()
+            .fold(count, |sum, block| sum.saturating_add(block.events.len()))
+    });
+    if total_blocks > MAX_MODULE_BLOCKS || total_events > MAX_MODULE_EVENTS {
+        diagnostic(
+            &mut diagnostics,
+            "ORES-CFG010",
+            "<module>",
+            None,
+            "global CFG block/event work budget exceeded",
+        );
+        return CfgReport {
+            schema_version: 2,
+            assurance_scope: "acyclic_declared_scalar_cfg_only; no source-proof, WCET, scheduler or complete borrow verification",
+            admitted_to_static_gate: false,
+            hard_realtime_certified: false,
+            diagnostics,
+            lock_order_edges: BTreeMap::new(),
+        };
     }
     let mut names = HashSet::new();
     for f in &program.functions {
@@ -517,7 +563,21 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                                 at,
                                 "invalid/reentrant lock",
                             );
+                        } else if state.held_locks.len() >= MAX_HELD_LOCKS
+                            || lock_order_work.saturating_add(state.held_locks.len())
+                                > MAX_LOCK_ORDER_WORK
+                        {
+                            diagnostic(
+                                &mut diagnostics,
+                                "ORES-CFG206",
+                                &f.name,
+                                at,
+                                "lock nesting or global lock-order graph budget exceeded",
+                            );
                         } else {
+                            // Count attempted pairs even when deduplicated:
+                            // the construction effort itself is security-bounded.
+                            lock_order_work += state.held_locks.len();
                             for held in &state.held_locks {
                                 edges.entry(held.clone()).or_default().insert(lock.clone());
                             }
@@ -538,16 +598,19 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                         }
                     }
                     Event::Cooperate => {
-                        if !state.held_locks.is_empty() {
+                        // Without a verified pinned-continuation proof, a
+                        // cooperative yield cannot cross live loans or locks.
+                        if !state.held_locks.is_empty() || !state.loans.is_empty() {
                             diagnostic(
                                 &mut diagnostics,
                                 "ORES-CFG202",
                                 &f.name,
                                 at,
-                                "cooperate under lock",
+                                "cooperate with live loans or held locks",
                             );
+                        } else {
+                            state.uninterrupted = Some(0);
                         }
-                        state.uninterrupted = Some(0);
                     }
                     Event::Suspend => {
                         if !state.loans.is_empty() || !state.held_locks.is_empty() {
@@ -562,6 +625,15 @@ pub fn analyze_cfg(program: &CfgProgram, profile: SafetyProfile) -> CfgReport {
                         state.uninterrupted = Some(0);
                     }
                     Event::Compute { units } => {
+                        if *units == Some(0) {
+                            diagnostic(
+                                &mut diagnostics,
+                                "ORES-CFG303",
+                                &f.name,
+                                at,
+                                "zero-cost compute event cannot attest work",
+                            );
+                        }
                         state.uninterrupted = state
                             .uninterrupted
                             .and_then(|old| old.checked_add((*units)?));
@@ -762,6 +834,42 @@ mod tests {
         r.diagnostics.iter().any(|d| d.code == code)
     }
     #[test]
+    fn oversized_function_manifest_exits_before_cfg_traversal() {
+        let mut program: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        while program.functions.len() <= MAX_FUNCTIONS {
+            program.functions.push(CfgFunction {
+                name: format!("f{}", program.functions.len()),
+                entry: "a".into(),
+                max_uninterrupted_units: Some(10),
+                allow_error_propagation: false,
+                blocks: Vec::new(),
+            });
+        }
+        let report = analyze_cfg(&program, SafetyProfile::General);
+        assert!(!report.admitted_to_static_gate);
+        assert!(has(&report, "ORES-CFG000"));
+        assert_eq!(report.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn global_event_budget_is_enforced_for_library_callers() {
+        let mut p: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        p.functions[0].blocks[0].events = std::iter::repeat_with(|| Event::Cooperate)
+            .take(MAX_MODULE_EVENTS + 1)
+            .collect();
+        let r = analyze_cfg(&p, SafetyProfile::General);
+        assert!(!r.admitted_to_static_gate);
+        assert!(has(&r, "ORES-CFG010"));
+        assert!(!r.hard_realtime_certified);
+    }
+
+    #[test]
     fn straight_line_valid() {
         let r = run(
             &base(
@@ -912,6 +1020,18 @@ mod tests {
         assert!(has(&r, "ORES-CFG203"));
     }
     #[test]
+    fn zero_cost_compute_is_rejected_by_every_profile() {
+        let fixture = base(
+            r#"[{"id":"a","events":[{"kind":"compute","units":0}],"terminator":{"kind":"return"}}]"#,
+        );
+        for profile in [SafetyProfile::General, SafetyProfile::Soft, SafetyProfile::Hard] {
+            let report = run(&fixture, profile);
+            assert!(has(&report, "ORES-CFG303"));
+            assert!(!report.admitted_to_static_gate);
+        }
+    }
+
+    #[test]
     fn unknown_call_does_not_get_safety_certificate() {
         let r = run(
             &base(
@@ -923,6 +1043,64 @@ mod tests {
         assert!(!r.hard_realtime_certified);
     }
     #[test]
+    fn lock_depth_limit_rejects_quadratic_graph_growth() {
+        let mut p: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        p.functions[0].blocks[0].events = (0..=MAX_HELD_LOCKS)
+            .map(|i| Event::Lock {
+                id: format!("L{i}"),
+            })
+            .collect();
+        let r = analyze_cfg(&p, SafetyProfile::General);
+        assert!(has(&r, "ORES-CFG206"));
+        assert!(!r.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn global_lock_order_work_limit_rejects_repeated_acquisitions() {
+        let mut p: CfgProgram = serde_json::from_str(&base(
+            r#"[{"id":"a","events":[],"terminator":{"kind":"return"}}]"#,
+        ))
+        .unwrap();
+        let mut events = Vec::new();
+        for repeat in 0..10 {
+            for level in 0..MAX_HELD_LOCKS {
+                events.push(Event::Lock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+            for level in (0..MAX_HELD_LOCKS).rev() {
+                events.push(Event::Unlock {
+                    id: format!("L{repeat}_{level}"),
+                });
+            }
+        }
+        p.functions[0].blocks[0].events = events;
+        let report = analyze_cfg(&p, SafetyProfile::General);
+        assert!(has(&report, "ORES-CFG206"));
+        assert!(!report.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn deep_lock_order_graph_is_checked_without_recursive_dfs() {
+        let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for i in 0..10_000 {
+            edges
+                .entry(format!("L{i}"))
+                .or_default()
+                .insert(format!("L{}", i + 1));
+        }
+        assert!(!lock_cycle(&edges), "a long path is not a cycle");
+        edges
+            .entry("L10000".into())
+            .or_default()
+            .insert("L0".into());
+        assert!(lock_cycle(&edges), "the closing edge creates a cycle");
+    }
+
+    #[test]
     fn lock_cycle_across_functions_rejected() {
         let x = r#"{"schema_version":2,"effects_complete":true,"functions":[
           {"name":"f","entry":"a","max_uninterrupted_units":10,"allow_error_propagation":false,
@@ -932,6 +1110,25 @@ mod tests {
         ]}"#;
         assert!(has(&run(x, SafetyProfile::General), "ORES-CFG205"));
     }
+    #[test]
+    fn cooperative_yield_rejects_live_loan_even_when_later_released() {
+        let r = run(
+            &base(r#"[{"id":"a","events":[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"cooperate"},{"kind":"end_borrow","loan":"l"}],"terminator":{"kind":"return"}}]"#),
+            SafetyProfile::General,
+        );
+        assert!(has(&r, "ORES-CFG202"));
+        assert!(!r.admitted_to_static_gate);
+    }
+
+    #[test]
+    fn cooperative_yield_after_end_borrow_is_valid() {
+        let r = run(
+            &base(r#"[{"id":"a","events":[{"kind":"define","place":"x"},{"kind":"borrow","place":"x","loan":"l","mutable":false},{"kind":"end_borrow","loan":"l"},{"kind":"cooperate"}],"terminator":{"kind":"return"}}]"#),
+            SafetyProfile::General,
+        );
+        assert!(r.admitted_to_static_gate, "{:?}", r.diagnostics);
+    }
+
     #[test]
     fn error_paths_must_balance() {
         let r = run(
